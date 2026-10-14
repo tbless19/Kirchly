@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Upload a photo of a circuit problem and watch it solved with animated current flow." />
+    <title>Circuit Lens</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><path d='M2 16h6l3-8 5 16 5-16 3 8h6' fill='none' stroke='%23fb923c' stroke-width='3' stroke-linejoin='round'/></svg>" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M2 16h6l3-8 5 16 5-16 3 8h6" /></svg>
+        <span>Circuit Lens</span>
+      </div>
+      <div class="topbar-actions">
+        <button id="new-btn" class="ghost" type="button" title="Start a blank circuit">New</button>
+        <select id="example-select" aria-label="Load an example circuit">
+          <option value="">Load example…</option>
+        </select>
+        <button id="settings-btn" class="ghost" type="button">API key</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="panel left">
+        <section class="card props-card" id="props-card" hidden>
+          <h2>Selected part</h2>
+          <div id="props-body"></div>
+        </section>
+
+        <section class="card">
+          <h2>1 · Upload a circuit</h2>
+          <label id="dropzone" class="dropzone" tabindex="0">
+            <input id="file-input" type="file" accept="image/*" hidden />
+            <img id="preview" alt="Uploaded circuit" hidden />
+            <span id="drop-hint">Drop, paste, or click to choose a photo of a circuit problem</span>
+          </label>
+          <textarea id="hint" rows="2" placeholder="Optional: anything the photo doesn't show (e.g. “solve problem 3b”)"></textarea>
+          <div class="row">
+            <button id="read-btn" type="button" disabled>Read circuit</button>
+            <button id="cancel-btn" type="button" class="ghost" hidden>Cancel</button>
+          </div>
+          <p id="status" class="status" role="status"></p>
+        </section>
+
+        <section class="card" id="edit-card" hidden>
+          <h2>2 · Check the values</h2>
+          <p class="muted small">Fix any misread value. Use <code>?</code> for an unknown. SI prefixes work: 4.7k, 10m, 2µ.</p>
+          <table class="edit-table" id="comp-table">
+            <thead><tr><th>Part</th><th>Type</th><th>Value</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <div id="givens-wrap" hidden>
+            <h3>Given</h3>
+            <table class="edit-table" id="given-table"><tbody></tbody></table>
+          </div>
+          <details class="json-editor">
+            <summary>Edit raw JSON</summary>
+            <textarea id="json-text" rows="14" spellcheck="false"></textarea>
+            <button id="json-apply" type="button" class="ghost">Apply JSON</button>
+          </details>
+        </section>
+      </aside>
+
+      <section class="stage">
+        <div class="toolbar">
+          <button id="edit-toggle" type="button" class="ghost" aria-pressed="false">✎ Edit circuit</button>
+          <button id="flow-toggle" type="button" class="ghost" aria-pressed="true">Pause flow</button>
+          <label class="inline">Speed <input id="speed" type="range" min="0.2" max="3" step="0.1" value="1" /></label>
+          <label class="inline"><input id="electron" type="checkbox" /> Electron flow</label>
+          <label class="inline"><input id="labels" type="checkbox" checked /> Labels</label>
+          <label class="inline"><input id="vcolor" type="checkbox" checked /> Voltage colors</label>
+        </div>
+        <div class="edit-toolbar" id="edit-toolbar" role="toolbar" aria-label="Circuit editing tools" hidden>
+          <button type="button" class="tool" data-tool="select" title="Select / move (S)">Select<kbd>S</kbd></button>
+          <button type="button" class="tool" data-tool="wire" title="Wire (W)">Wire<kbd>W</kbd></button>
+          <button type="button" class="tool" data-tool="resistor" title="Resistor (R)">Resistor<kbd>R</kbd></button>
+          <button type="button" class="tool" data-tool="voltage_source" title="Voltage source (V)">V source<kbd>V</kbd></button>
+          <button type="button" class="tool" data-tool="current_source" title="Current source (I)">I source<kbd>I</kbd></button>
+          <button type="button" class="tool" data-tool="capacitor" title="Capacitor (C)">Capacitor<kbd>C</kbd></button>
+          <button type="button" class="tool" data-tool="inductor" title="Inductor (L)">Inductor<kbd>L</kbd></button>
+          <select id="dep-tool" class="tool-select" aria-label="Dependent source tool">
+            <option value="">Dependent…</option>
+            <option value="vcvs">VCVS (V = k·Vx)</option>
+            <option value="vccs">VCCS (I = g·Vx)</option>
+            <option value="ccvs">CCVS (V = r·Ix)</option>
+            <option value="cccs">CCCS (I = β·Ix)</option>
+          </select>
+          <button type="button" class="tool" data-tool="ground" title="Ground (G)">Ground<kbd>G</kbd></button>
+          <button type="button" class="tool" data-tool="delete" title="Delete (D)">Delete<kbd>D</kbd></button>
+          <span class="spacer"></span>
+          <button type="button" id="undo-btn" class="ghost" title="Undo (Ctrl+Z)" disabled>↶ Undo</button>
+          <button type="button" id="redo-btn" class="ghost" title="Redo (Ctrl+Y)" disabled>↷ Redo</button>
+        </div>
+        <div class="canvas-wrap">
+          <svg id="schematic" role="img" aria-label="Circuit schematic"></svg>
+          <div id="edit-hint" class="edit-hint" hidden></div>
+          <div id="empty" class="empty">
+            <p>Upload a circuit photo, or load an example to see how it works.</p>
+          </div>
+          <div id="tooltip" class="tooltip" hidden></div>
+          <div id="legend" class="legend" hidden>
+            <span id="legend-min"></span><div class="ramp"></div><span id="legend-max"></span>
+          </div>
+        </div>
+        <div class="stepper" id="stepper" hidden>
+          <div class="stepper-controls">
+            <button id="step-prev" type="button" class="ghost" aria-label="Previous step">‹</button>
+            <button id="step-play" type="button">▶ Play walkthrough</button>
+            <button id="step-next" type="button" class="ghost" aria-label="Next step">›</button>
+            <span id="step-count" class="muted small"></span>
+            <div class="progress"><div id="step-progress"></div></div>
+          </div>
+          <div class="step-card">
+            <h3 id="step-title"></h3>
+            <div id="step-body"></div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel right">
+        <section class="card" id="answers-card" hidden>
+          <h2>Answers</h2>
+          <ul id="answers" class="answers"></ul>
+        </section>
+        <section class="card" id="results-card" hidden>
+          <h2>Every component</h2>
+          <table class="results" id="results">
+            <thead><tr><th>Part</th><th>V</th><th>I</th><th>P</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <p class="muted small">P &gt; 0 absorbs, P &lt; 0 delivers. Current is positive in the direction the dots move (conventional flow).</p>
+        </section>
+        <section class="card" id="notes-card" hidden>
+          <h2>Notes</h2>
+          <ul id="notes" class="notes"></ul>
+        </section>
+      </aside>
+    </main>
+
+    <dialog id="settings">
+      <form method="dialog">
+        <h2>Anthropic API key</h2>
+        <p class="small">Reading photos uses Claude's vision model, billed to your own key. The key is sent only to <code>api.anthropic.com</code>, straight from your browser. Get one at <a href="https://platform.claude.com/" target="_blank" rel="noopener">platform.claude.com</a>.</p>
+        <input id="api-key" type="password" autocomplete="off" placeholder="sk-ant-…" />
+        <label class="inline small"><input id="remember-key" type="checkbox" checked /> Remember on this device</label>
+        <div class="row end">
+          <button id="clear-key" type="button" class="ghost">Forget key</button>
+          <button value="save" type="submit">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

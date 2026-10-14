@@ -1,0 +1,22 @@
+{
+  "name": "circuit-lens",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest run --pool=threads"
+  },
+  "license": "MIT",
+  "description": "Upload a photo of a circuit problem; it solves for the unknowns and animates current and voltage.",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.134.0"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.4"
+  },
+  "private": true,
+  "type": "module"
+}
