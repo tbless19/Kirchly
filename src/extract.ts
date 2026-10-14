@@ -12,9 +12,19 @@ const quantityEnum = ["component_current", "component_voltage", "component_power
 const CIRCUIT_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["title", "points", "wires", "components", "ground", "givens", "asks", "notes"],
+  required: ["title", "analysis", "points", "wires", "components", "ground", "givens", "asks", "notes"],
   properties: {
     title: { type: "string" },
+    analysis: {
+      type: "object",
+      additionalProperties: false,
+      required: ["mode", "frequency", "amplitude"],
+      properties: {
+        mode: { type: "string", enum: ["dc", "ac"] },
+        frequency: { anyOf: [{ type: "number" }, { type: "null" }] },
+        amplitude: { type: "string", enum: ["peak", "rms"] },
+      },
+    },
     points: {
       type: "array",
       items: {
@@ -38,16 +48,18 @@ const CIRCUIT_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["id", "kind", "a", "b", "value", "ctrl_a", "ctrl_b", "ctrl_component"],
+        required: ["id", "kind", "a", "b", "value", "phase", "reactance", "ctrl_a", "ctrl_b", "ctrl_component"],
         properties: {
           id: { type: "string" },
           kind: {
             type: "string",
-            enum: ["resistor", "voltage_source", "current_source", "capacitor", "inductor", "vcvs", "vccs", "ccvs", "cccs"],
+            enum: ["resistor", "voltage_source", "current_source", "capacitor", "inductor", "impedance", "vcvs", "vccs", "ccvs", "cccs"],
           },
           a: { type: "string" },
           b: { type: "string" },
           value: { anyOf: [{ type: "number" }, { type: "null" }] },
+          phase: { anyOf: [{ type: "number" }, { type: "null" }] },
+          reactance: { anyOf: [{ type: "number" }, { type: "null" }] },
           ctrl_a: nullableString,
           ctrl_b: nullableString,
           ctrl_component: nullableString,
@@ -89,7 +101,7 @@ const CIRCUIT_SCHEMA = {
   },
 };
 
-const SYSTEM_PROMPT = `You convert photos or screenshots of electrical circuit problems (textbook figures, hand drawings, whiteboards) into a JSON netlist that a DC circuit solver and a schematic animator will use. You transcribe; you do not solve.
+const SYSTEM_PROMPT = `You convert photos or screenshots of electrical circuit problems (textbook figures, hand drawings, whiteboards) into a JSON netlist that a DC and AC (phasor) circuit solver and a schematic animator will use. You transcribe; you do not solve.
 
 Layout
 - "points" are connection points on an integer grid that mirrors the drawing: x grows to the right, y grows downward. Use a spacing of about 3 grid units per component so labels fit (e.g. a simple loop spans x 0..3 or 0..6). Place points where the drawing has corners, junctions and component terminals.
@@ -104,6 +116,14 @@ Components (values in SI base units: ohms, volts, amps, farads, henries; 4.7 kΩ
 - Use the labels in the drawing as ids (R1, Vs, Rx, ...). If a component is unlabeled, invent a short id.
 - A value that the problem asks you to find, or that is not shown, is null.
 - If a current arrow is drawn next to a component, orient that component's a->b along the arrow.
+- phase and reactance are null except as described under AC below.
+
+AC problems (sinusoidal sources, phasors, impedances, "jω", ∠ angles, frequencies)
+- Set analysis.mode = "ac" and analysis.frequency in hertz. If only ω is given, frequency = ω / (2π) (e.g. ω = 377 rad/s -> 60). If the problem gives impedances directly and no frequency, frequency = null. For DC problems: mode "dc", frequency null, amplitude "peak".
+- Sources: value = amplitude, phase = angle in degrees using the cosine reference. 10 cos(377t + 30°) -> value 10, phase 30. A sine source 5 sin(ωt) -> value 5, phase -90. A phasor 10∠30° -> value 10, phase 30.
+- analysis.amplitude = "rms" when magnitudes are RMS (e.g. "120 V rms", household mains, "Vrms"); otherwise "peak".
+- Capacitors and inductors given as C or L values stay capacitor / inductor. A part given only as an impedance (e.g. "−j5 Ω", "j4 Ω", "3 + j4 Ω", or a box labelled Z) is kind "impedance" with value = resistance (real part, 0 if none) and reactance = imaginary part in ohms (−j5 -> -5). An unknown reactance is null.
+- In AC, givens are magnitudes (|I|, |V|) or average power.
 
 Problem statement
 - "givens": quantities the problem states as known that are not component values (e.g. "I1 = 2 mA through R1", "Vab = 3 V"). They let the solver find components with null values. component_* quantities reference a component id; voltage_between uses points a and b (V(a) - V(b)).

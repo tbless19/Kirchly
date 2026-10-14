@@ -309,3 +309,31 @@ dialog input[type="password"] { width: 100%; margin: 0.4rem 0 0.6rem; font-famil
 @media (prefers-reduced-motion: reduce) {
   #schematic .component.intro, .step-card { animation: none; }
 }
+
+/* ---------- AC ---------- */
+.analysis { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; margin-bottom: 0.6rem; }
+.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.segmented button { background: transparent; color: var(--muted); border: 0; border-radius: 0; padding: 0.3rem 0.9rem; font-weight: 600; }
+.segmented button[aria-pressed="true"] { background: var(--accent); color: #1b0f02; }
+.ac-settings { display: flex; flex-wrap: wrap; gap: 0.4rem 0.6rem; align-items: center; }
+.ac-settings[hidden] { display: none; }
+.ac-settings input { width: 74px; padding: 0.3rem 0.45rem; font-family: var(--mono); font-size: 0.85rem; }
+.ac-settings input.invalid { border-color: var(--danger); }
+.ac-settings select { padding: 0.3rem 0.4rem; font-size: 0.85rem; }
+
+.scope { width: 100%; height: auto; display: block; }
+.scope .scope-grid { fill: none; stroke: var(--border); stroke-width: 1; }
+.scope .scope-axis { stroke: var(--border); stroke-width: 1; }
+.scope .scope-arrow { stroke-width: 2.5; }
+.scope .scope-proj { stroke-width: 1; stroke-dasharray: 3 3; }
+.scope .scope-wave { fill: none; stroke-width: 2; }
+.scope .scope-v { stroke: var(--accent); }
+.scope .scope-i { stroke: var(--accent-2); }
+.scope .scope-v-fill { fill: var(--accent); }
+.scope .scope-i-fill { fill: var(--accent-2); }
+.scope .scope-cursor { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 3; }
+.scope-caption { display: flex; flex-wrap: wrap; gap: 0.2rem 0.8rem; margin: 0.4rem 0 0.2rem; font: 0.78rem var(--mono); color: var(--muted); }
+.scope-caption .cap-v { color: var(--accent); }
+.scope-caption .cap-i { color: var(--accent-2); }
+#schematic .flow { transition: opacity 0.25s; }
+#results-card { overflow-x: auto; }

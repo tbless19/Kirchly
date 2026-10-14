@@ -1,16 +1,21 @@
 // SVG schematic renderer with animated current flow.
-// Current is drawn as dots marching along every wire and component (dash-offset animation),
-// with speed proportional to the square root of the current so small currents stay visible.
+// Current is drawn as dots marching along every wire and component (dash-offset animation).
+//   - DC: steady flow, speed ∝ √|I| so small currents stay visible.
+//   - AC: dots follow the instantaneous current i(t) = Re(I·e^{jθ}) and slosh back and forth;
+//     wire colours follow the instantaneous node voltages. θ advances slowly so the motion is visible.
 
 import type { Circuit, Component } from "./types";
-import type { Solution } from "./solver";
-import { KIND_LABEL, formatSI, formatValue } from "./format";
+import { impedanceOf, type Solution } from "./solver";
+import { KIND_LABEL, describeValue, formatPhasor, formatPhasorShort as shortPhasor, formatRect, formatSI } from "./format";
+import { abs, argDeg, instant, type Complex } from "./complex";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const U = 80; // pixels per grid unit
 export const GRID = U;
 const H = 26; // half-length of a component symbol
 const DOT_GAP = 18;
+/** Visual AC frequency: cycles per second of animation time at speed 1. */
+const AC_VISUAL_HZ = 0.3;
 
 type Vec = { x: number; y: number };
 
@@ -28,10 +33,23 @@ export interface Highlight {
   nodes: number[];
 }
 
+export interface Legend {
+  min: number;
+  max: number;
+  ac: boolean;
+}
+
 interface Flow {
   el: SVGPathElement;
-  current: number;
+  current: Complex;
   offset: number;
+}
+
+/** An element whose colour follows a node's voltage. */
+interface Tinted {
+  el: SVGElement;
+  node: number;
+  attr: "stroke" | "fill";
 }
 
 export function el<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number> = {}, parent?: Element) {
@@ -67,7 +85,10 @@ export class CircuitView {
   /** Keeps the viewBox fixed (e.g. while dragging) so the drawing doesn't shift under the cursor. */
   freezeViewBox = false;
   private flows: Flow[] = [];
+  private tinted: Tinted[] = [];
   private last = 0;
+  /** AC animation phase θ = ωt in radians (animation time, not real time). */
+  phase = 0;
   private circuit: Circuit | null = null;
   private solution: Solution | null = null;
   private highlight: Highlight | null = null;
@@ -75,7 +96,9 @@ export class CircuitView {
   opts: ViewOptions = { playing: true, speed: 1, electronFlow: false, showLabels: true, showNodeVoltages: true, editMode: false };
   onSelect: (componentId: string | null) => void = () => {};
   /** Called after each render with the voltage range used for colouring (null if unsolved). */
-  onLegend: (range: { min: number; max: number } | null) => void = () => {};
+  onLegend: (legend: Legend | null) => void = () => {};
+  /** Called every animation frame with the AC phase θ (radians). */
+  onFrame: (phase: number) => void = () => {};
 
   constructor(svg: SVGSVGElement, tooltip: HTMLElement) {
     this.svg = svg;
@@ -149,18 +172,42 @@ export class CircuitView {
   private tick = (t: number) => {
     const dt = this.last ? Math.min(0.1, (t - this.last) / 1000) : 0;
     this.last = t;
-    if (this.opts.playing && this.flows.length) {
-      const imax = Math.max(...this.flows.map((f) => Math.abs(f.current)));
+    const sol = this.solution;
+    if (this.opts.playing) {
       const dir = this.opts.electronFlow ? -1 : 1;
-      for (const f of this.flows) {
-        const rel = Math.abs(f.current) / imax;
-        const v = (25 + 110 * Math.sqrt(rel)) * this.opts.speed;
-        f.offset -= Math.sign(f.current) * dir * v * dt;
-        f.el.style.strokeDashoffset = String(f.offset % (DOT_GAP * 100));
+      if (sol?.ac) {
+        this.phase = (this.phase + 2 * Math.PI * AC_VISUAL_HZ * this.opts.speed * dt) % (2 * Math.PI);
+        const imax = Math.max(1e-30, ...this.flows.map((f) => abs(f.current)));
+        for (const f of this.flows) {
+          const rel = instant(f.current, this.phase) / imax;
+          const v = 150 * Math.sign(rel) * Math.sqrt(Math.abs(rel)) * this.opts.speed;
+          f.offset -= dir * v * dt;
+          f.el.style.strokeDashoffset = String(f.offset % (DOT_GAP * 100));
+          f.el.style.strokeOpacity = String(0.2 + 0.8 * Math.sqrt(Math.abs(rel)));
+        }
+        this.tint();
+      } else if (this.flows.length) {
+        const imax = Math.max(...this.flows.map((f) => Math.abs(f.current.re)));
+        for (const f of this.flows) {
+          const rel = Math.abs(f.current.re) / imax;
+          const v = (25 + 110 * Math.sqrt(rel)) * this.opts.speed;
+          f.offset -= Math.sign(f.current.re) * dir * v * dt;
+          f.el.style.strokeDashoffset = String(f.offset % (DOT_GAP * 100));
+        }
       }
     }
+    if (sol?.ac) this.onFrame(this.phase);
     requestAnimationFrame(this.tick);
   };
+
+  /** AC: recolour wires by the instantaneous node voltages. */
+  private tint() {
+    const sol = this.solution;
+    if (!sol?.ac || !this.opts.showNodeVoltages || !this.tinted.length) return;
+    const vmax = Math.max(1e-30, ...sol.nodeV.map(abs));
+    const colors = sol.nodeV.map((v) => voltageColor(0.5 + (0.5 * instant(v, this.phase)) / vmax));
+    for (const t of this.tinted) t.el.setAttribute(t.attr, colors[t.node]);
+  }
 
   // ------------------------------------------------------------ rendering
 
@@ -168,12 +215,14 @@ export class CircuitView {
     const svg = this.scene;
     svg.replaceChildren();
     this.flows = [];
+    this.tinted = [];
     const c = this.circuit;
     if (!c) {
       this.onLegend(null);
       return;
     }
     const sol = this.solution;
+    const ac = !!sol?.ac;
     const edit = this.opts.editMode;
     const pts = new Map(c.points.map((p) => [p.id, { x: p.x * U, y: p.y * U }]));
     const P = (id: string): Vec => pts.get(id) ?? { x: 0, y: 0 };
@@ -193,21 +242,33 @@ export class CircuitView {
       el("rect", { x: -U * 60, y: -U * 60, width: U * 120, height: U * 120, fill: "url(#grid)", class: "grid-bg" }, svg);
     }
 
-    // Voltage colouring.
+    // Voltage colouring: static in DC; in AC the initial colour is overwritten every frame by tint().
     let vmin = 0;
     let vmax = 0;
     if (sol) {
-      vmin = Math.min(...sol.nodeVoltage);
-      vmax = Math.max(...sol.nodeVoltage);
+      if (ac) {
+        vmax = Math.max(...sol.nodeV.map(abs));
+        vmin = -vmax;
+      } else {
+        vmin = Math.min(...sol.nodeV.map((v) => v.re));
+        vmax = Math.max(...sol.nodeV.map((v) => v.re));
+      }
     }
+    const nodeOfPoint = (pointId: string) => sol?.topology.nodeOf.get(pointId);
     const nodeColor = (pointId: string): string => {
-      if (!sol || !this.opts.showNodeVoltages) return "var(--wire)";
-      const n = sol.topology.nodeOf.get(pointId);
-      if (n === undefined) return "var(--wire)";
+      const n = nodeOfPoint(pointId);
+      if (!sol || !this.opts.showNodeVoltages || n === undefined) return "var(--wire)";
+      const v = ac ? instant(sol.nodeV[n], this.phase) : sol.nodeV[n].re;
       const span = vmax - vmin;
-      return voltageColor(span < 1e-12 ? 0.5 : (sol.nodeVoltage[n] - vmin) / span);
+      return voltageColor(span < 1e-12 ? 0.5 : (v - vmin) / span);
     };
-    this.onLegend(sol && this.opts.showNodeVoltages ? { min: vmin, max: vmax } : null);
+    /** Registers an element for per-frame AC recolouring. */
+    const tint = <T extends SVGElement>(e: T, pointId: string, attr: "stroke" | "fill" = "stroke"): T => {
+      const n = nodeOfPoint(pointId);
+      if (ac && n !== undefined) this.tinted.push({ el: e, node: n, attr });
+      return e;
+    };
+    this.onLegend(sol && this.opts.showNodeVoltages ? { min: vmin, max: vmax, ac } : null);
 
     // Dots run above the wires but beneath component symbols, so symbols stay readable.
     const wireLayer = el("g", { class: "wires" }, svg);
@@ -216,24 +277,22 @@ export class CircuitView {
     const labelLayer = el("g", { class: "labels" }, svg);
     const maxX = Math.max(...xs);
 
-    const addFlow = (d: string, current: number, cls: string) => {
-      if (!sol || Math.abs(current) < 1e-12) return;
+    const imaxAll = sol ? Math.max(1e-30, ...Object.values(sol.compI).map(abs)) : 1;
+    const addFlow = (d: string, current: Complex, cls: string) => {
+      if (!sol || abs(current) < imaxAll * 1e-9) return;
       const p = el("path", { d, class: `flow ${cls}`, "stroke-dasharray": `0 ${DOT_GAP}` }, flowLayer);
       this.flows.push({ el: p, current, offset: Math.random() * DOT_GAP });
     };
-    const imaxAll = sol ? Math.max(1e-30, ...Object.values(sol.compI).map(Math.abs)) : 1;
-    const flowsAreTiny = (i: number) => Math.abs(i) < imaxAll * 1e-9;
 
     // Wires.
     c.wires.forEach((wr, wi) => {
       const a = P(wr.a);
       const b = P(wr.b);
       const d = elbow(a, b);
-      const node = sol?.topology.nodeOf.get(wr.a);
-      el("path", { d, class: "wire", stroke: nodeColor(wr.a), "data-node": node ?? "" }, wireLayer);
+      const node = nodeOfPoint(wr.a);
+      tint(el("path", { d, class: "wire", stroke: nodeColor(wr.a), "data-node": node ?? "" }, wireLayer), wr.a);
       if (edit) el("path", { d, class: `wire-hit${this.selectedWire === wi ? " selected" : ""}`, "data-wire": wi }, wireLayer);
-      const i = sol ? sol.wireI[wi] : 0;
-      if (sol && !flowsAreTiny(i)) addFlow(d, i, `node-${node}`);
+      if (sol) addFlow(d, sol.wireI[wi], `node-${node}`);
     });
 
     // Junction dots where three or more conductors meet.
@@ -244,23 +303,24 @@ export class CircuitView {
     for (const [id, d] of degree) {
       if (d >= 3) {
         const p = P(id);
-        const node = sol?.topology.nodeOf.get(id);
-        el("circle", { cx: p.x, cy: p.y, r: 4.5, fill: nodeColor(id), class: "junction", "data-node": node ?? "" }, wireLayer);
+        const node = nodeOfPoint(id);
+        tint(el("circle", { cx: p.x, cy: p.y, r: 4.5, fill: nodeColor(id), class: "junction", "data-node": node ?? "" }, wireLayer), id, "fill");
       }
     }
 
     // Components.
-    const pmax = sol ? Math.max(1e-30, ...c.components.filter((k) => k.kind === "resistor").map((k) => Math.abs(sol.compP[k.id]))) : 1;
+    const pmax = sol ? Math.max(1e-30, ...c.components.filter((k) => k.kind === "resistor" || k.kind === "impedance").map((k) => Math.abs(sol.compS[k.id].re))) : 1;
     c.components.forEach((k, idx) => {
       const a = P(k.a);
       const b = P(k.b);
       const g = el("g", { class: "component", "data-id": k.id, tabindex: 0, role: "button", "aria-label": k.id }, compLayer);
       if (intro) g.style.animationDelay = `${idx * 70}ms`;
       if (intro) g.classList.add("intro");
-      this.drawComponent(g, k, a, b, nodeColor(k.a), nodeColor(k.b), sol ? Math.abs(sol.compP[k.id]) / pmax : 0);
+      const [leadA, leadB] = this.drawComponent(g, k, a, b, nodeColor(k.a), nodeColor(k.b), sol ? Math.abs(sol.compS[k.id].re) / pmax : 0);
+      tint(leadA, k.a);
+      tint(leadB, k.b);
 
-      const i = sol?.compI[k.id] ?? 0;
-      if (sol && !flowsAreTiny(i)) addFlow(`M${a.x},${a.y} L${b.x},${b.y}`, i, `comp-${k.id}`);
+      if (sol) addFlow(`M${a.x},${a.y} L${b.x},${b.y}`, sol.compI[k.id], `comp-${k.id}`);
 
       g.addEventListener("mouseenter", (e) => this.showTooltip(k, e as MouseEvent));
       g.addEventListener("mousemove", (e) => this.moveTooltip(e as MouseEvent));
@@ -298,10 +358,11 @@ export class CircuitView {
           .map((id) => ({ id, p: P(id) }))
           .sort((u, v) => u.p.y - v.p.y || u.p.x - v.p.x)[0];
         if (!best) return;
-        const text = `${sol.topology.nodeNames[n]} ${formatSI(sol.nodeVoltage[n], "V", 3)}`;
+        const value = ac ? shortPhasor(sol.nodeV[n], "V") : formatSI(sol.nodeV[n].re, "V", 3);
+        const text = `${sol.topology.nodeNames[n]} ${value}`;
         const gx = el("g", { class: "node-badge", "data-node": n }, labelLayer);
         const tw = text.length * 6.6 + 12;
-        el("rect", { x: best.p.x - tw / 2, y: best.p.y - 40, width: tw, height: 18, rx: 9, fill: nodeColor(best.id) }, gx);
+        tint(el("rect", { x: best.p.x - tw / 2, y: best.p.y - 40, width: tw, height: 18, rx: 9, fill: nodeColor(best.id) }, gx), best.id, "fill");
         const t = el("text", { x: best.p.x, y: best.p.y - 27, "text-anchor": "middle" }, gx);
         t.textContent = text;
       });
@@ -310,7 +371,8 @@ export class CircuitView {
     this.applyHighlight();
   }
 
-  private drawComponent(g: SVGGElement, k: Component, a: Vec, b: Vec, colA: string, colB: string, heat: number) {
+  /** Draws a part; returns its two lead lines (for voltage tinting). */
+  private drawComponent(g: SVGGElement, k: Component, a: Vec, b: Vec, colA: string, colB: string, heat: number): [SVGLineElement, SVGLineElement] {
     const dx = b.x - a.x;
     const dy = b.y - a.y;
     const len = Math.hypot(dx, dy) || 1;
@@ -321,8 +383,8 @@ export class CircuitView {
     const s = { x: mid.x - ux * hl, y: mid.y - uy * hl };
     const e = { x: mid.x + ux * hl, y: mid.y + uy * hl };
     // Leads in each terminal's node colour.
-    el("line", { x1: a.x, y1: a.y, x2: s.x, y2: s.y, class: "wire", stroke: colA }, g);
-    el("line", { x1: e.x, y1: e.y, x2: b.x, y2: b.y, class: "wire", stroke: colB }, g);
+    const leadA = el("line", { x1: a.x, y1: a.y, x2: s.x, y2: s.y, class: "wire", stroke: colA }, g);
+    const leadB = el("line", { x1: e.x, y1: e.y, x2: b.x, y2: b.y, class: "wire", stroke: colB }, g);
     // Invisible fat hit target.
     el("line", { x1: a.x, y1: a.y, x2: b.x, y2: b.y, class: "hit" }, g);
 
@@ -330,6 +392,7 @@ export class CircuitView {
     const sym = el("g", { transform: `translate(${mid.x},${mid.y}) rotate(${angle})`, class: `symbol ${k.kind}` }, g);
     const sc = hl / H;
     const s1 = (v: number) => v * sc;
+    const ac = !!this.solution?.ac;
 
     switch (k.kind) {
       case "resistor": {
@@ -342,6 +405,14 @@ export class CircuitView {
         d += ` L${s1(H)},0`;
         if (heat > 0.02) el("path", { d, class: "heat", opacity: Math.min(1, 0.25 + heat * 0.9) }, sym);
         el("path", { d, class: "body" }, sym);
+        break;
+      }
+      case "impedance": {
+        const w = s1(H) - 4;
+        if (heat > 0.02) el("rect", { x: -w, y: -9, width: 2 * w, height: 18, class: "heat", opacity: Math.min(1, 0.25 + heat * 0.9) }, sym);
+        el("line", { x1: s1(-H), y1: 0, x2: -w, y2: 0, class: "body" }, sym);
+        el("line", { x1: w, y1: 0, x2: s1(H), y2: 0, class: "body" }, sym);
+        el("rect", { x: -w, y: -9, width: 2 * w, height: 18, rx: 2, class: "body source" }, sym);
         break;
       }
       case "capacitor":
@@ -364,6 +435,7 @@ export class CircuitView {
         el("line", { x1: s1(-H), y1: 0, x2: -20, y2: 0, class: "body" }, sym);
         el("line", { x1: 20, y1: 0, x2: s1(H), y2: 0, class: "body" }, sym);
         if (k.kind === "current_source") this.arrow(sym);
+        else if (ac) this.sineGlyph(sym, angle);
         else this.plusMinus(sym, angle);
         break;
       }
@@ -376,6 +448,7 @@ export class CircuitView {
         else this.plusMinus(sym, angle);
       }
     }
+    return [leadA, leadB];
   }
 
   private arrow(sym: SVGGElement) {
@@ -391,6 +464,14 @@ export class CircuitView {
     el("path", { d: "M-4.5,0 H4.5", class: "glyph" }, minus);
   }
 
+  /** AC source: a sine wave, plus a small + at terminal a to keep the polarity visible. */
+  private sineGlyph(sym: SVGGElement, angle: number) {
+    const wave = el("g", { transform: `rotate(${-angle})` }, sym);
+    el("path", { d: "M-11,0 C-7,-11 -3,-11 0,0 S7,11 11,0", class: "glyph" }, wave);
+    const plus = el("g", { transform: `translate(-28,-11) rotate(${-angle})` }, sym);
+    el("path", { d: "M-3.5,0 H3.5 M0,-3.5 V3.5", class: "glyph" }, plus);
+  }
+
   private drawGround(parent: SVGGElement, p: Vec, color: string) {
     const g = el("g", { class: "ground", transform: `translate(${p.x},${p.y})` }, parent);
     el("line", { x1: 0, y1: 0, x2: 0, y2: 16, class: "wire", stroke: color }, g);
@@ -401,27 +482,29 @@ export class CircuitView {
 
   private drawLabel(layer: SVGGElement, k: Component, a: Vec, b: Vec, onRightEdge: boolean) {
     const sol = this.solution;
+    const ac = !!sol?.ac;
     const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
     const vertical = Math.abs(b.y - a.y) > Math.abs(b.x - a.x);
     const g = el("g", { class: "label", "data-id": k.id }, layer);
     // Vertical parts get their label to the right, or to the left when they sit on the right edge.
+    // AC results take two lines everywhere (phasors are long), so horizontal labels sit a line higher.
+    const stacked = vertical || ac;
     const x = vertical ? mid.x + (onRightEdge ? -30 : 30) : mid.x;
-    const y = vertical ? mid.y - 6 : mid.y - 34;
+    const y = vertical ? mid.y - 6 : mid.y - (sol && ac ? 49 : 34);
     const anchor = vertical ? (onRightEdge ? "end" : "start") : "middle";
     const name = el("text", { x, y, "text-anchor": anchor, class: "label-name" }, g);
     name.textContent = k.id;
-    const valueText = k.value === null
-      ? sol
-        ? `= ${formatValue(k.kind, sol.values[k.id])}`
-        : "?"
-      : formatValue(k.kind, k.value);
-    const tspan = el("tspan", { class: k.value === null ? "label-unknown" : "label-value", dx: 6 }, name);
-    tspan.textContent = valueText;
+    const unknown = k.value === null || (k.kind === "impedance" && k.reactance === null);
+    const shown = unknown && sol ? { ...k, value: sol.values[k.id], reactance: sol.reactances[k.id] ?? k.reactance } : k;
+    const tspan = el("tspan", { class: unknown ? "label-unknown" : "label-value", dx: 6 }, name);
+    tspan.textContent = (unknown && sol ? "= " : "") + describeValue(shown, ac).replace(" ∠ ", "∠");
     if (sol) {
-      const i = formatSI(Math.abs(sol.compI[k.id]), "A", 3);
-      const v = formatSI(sol.compV[k.id], "V", 3);
+      const iz = sol.compI[k.id];
+      const vz = sol.compV[k.id];
+      const i = ac ? shortPhasor(iz, "A") : formatSI(Math.abs(iz.re), "A", 3);
+      const v = ac ? shortPhasor(vz, "V") : formatSI(vz.re, "V", 3);
       // Vertical parts stack I and V to stay narrow; horizontal parts have room for one line.
-      const lines = vertical ? [i, v] : [`${i} · ${v}`];
+      const lines = stacked ? [i, v] : [`${i} · ${v}`];
       lines.forEach((text, n) => {
         const t = el("text", { x, y: y + 15 * (n + 1), "text-anchor": anchor, class: "label-result" }, g);
         t.textContent = text;
@@ -457,14 +540,18 @@ export class CircuitView {
 
   private showTooltip(k: Component, e: MouseEvent) {
     const sol = this.solution;
+    const ac = !!sol?.ac;
     const rows: [string, string][] = [["Type", KIND_LABEL[k.kind]]];
-    const v = sol ? sol.values[k.id] : k.value;
-    rows.push(["Value", v === null || v === undefined ? "unknown" : formatValue(k.kind, v)]);
+    const shown = sol ? { ...k, value: sol.values[k.id], reactance: sol.reactances[k.id] ?? k.reactance } : k;
+    rows.push(["Value", shown.value === null ? "unknown" : describeValue(shown, ac)]);
     if (sol) {
-      rows.push(["Voltage", formatSI(sol.compV[k.id], "V")]);
-      rows.push(["Current", formatSI(sol.compI[k.id], "A")]);
-      const p = sol.compP[k.id];
-      rows.push([p >= 0 ? "Absorbs" : "Delivers", formatSI(Math.abs(p), "W")]);
+      const z = impedanceOf(k, sol);
+      if (ac && z) rows.push(["Impedance", formatRect(z, "Ω")]);
+      rows.push(["Voltage", ac ? formatPhasor(sol.compV[k.id], "V") : formatSI(sol.compV[k.id].re, "V")]);
+      rows.push(["Current", ac ? formatPhasor(sol.compI[k.id], "A") : formatSI(sol.compI[k.id].re, "A")]);
+      const s = sol.compS[k.id];
+      rows.push([s.re >= 0 ? (ac ? "Avg power in" : "Absorbs") : ac ? "Avg power out" : "Delivers", formatSI(Math.abs(s.re), "W")]);
+      if (ac) rows.push(["Reactive", formatSI(s.im, "var")]);
     }
     const t = this.tooltip;
     t.replaceChildren();

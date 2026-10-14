@@ -46,7 +46,21 @@
 
         <section class="card" id="edit-card" hidden>
           <h2>2 · Check the values</h2>
-          <p class="muted small">Fix any misread value. Use <code>?</code> for an unknown. SI prefixes work: 4.7k, 10m, 2µ.</p>
+          <div class="analysis" role="group" aria-label="Analysis type">
+            <div class="segmented">
+              <button id="mode-dc" type="button" aria-pressed="true">DC</button>
+              <button id="mode-ac" type="button" aria-pressed="false">AC</button>
+            </div>
+            <div id="ac-settings" class="ac-settings" hidden>
+              <label class="inline">f <input id="freq" inputmode="decimal" placeholder="60" aria-label="Frequency in hertz" /> Hz</label>
+              <select id="amplitude" aria-label="Source magnitudes are">
+                <option value="peak">peak</option>
+                <option value="rms">RMS</option>
+              </select>
+              <span id="omega" class="muted small"></span>
+            </div>
+          </div>
+          <p class="muted small">Fix any misread value. Use <code>?</code> for an unknown. SI prefixes work: 4.7k, 10m, 2µ. Impedances: 3+j4.</p>
           <table class="edit-table" id="comp-table">
             <thead><tr><th>Part</th><th>Type</th><th>Value</th></tr></thead>
             <tbody></tbody>
@@ -80,6 +94,7 @@
           <button type="button" class="tool" data-tool="current_source" title="Current source (I)">I source<kbd>I</kbd></button>
           <button type="button" class="tool" data-tool="capacitor" title="Capacitor (C)">Capacitor<kbd>C</kbd></button>
           <button type="button" class="tool" data-tool="inductor" title="Inductor (L)">Inductor<kbd>L</kbd></button>
+          <button type="button" class="tool" data-tool="impedance" title="Impedance R + jX (Z)">Impedance<kbd>Z</kbd></button>
           <select id="dep-tool" class="tool-select" aria-label="Dependent source tool">
             <option value="">Dependent…</option>
             <option value="vcvs">VCVS (V = k·Vx)</option>
@@ -101,7 +116,7 @@
           </div>
           <div id="tooltip" class="tooltip" hidden></div>
           <div id="legend" class="legend" hidden>
-            <span id="legend-min"></span><div class="ramp"></div><span id="legend-max"></span>
+            <span id="legend-label"></span><span id="legend-min"></span><div class="ramp"></div><span id="legend-max"></span>
           </div>
         </div>
         <div class="stepper" id="stepper" hidden>
@@ -120,6 +135,12 @@
       </section>
 
       <aside class="panel right">
+        <section class="card" id="scope-card" hidden>
+          <h2 id="scope-title">Waveforms</h2>
+          <svg id="scope-svg" class="scope" role="img" aria-label="Phasor diagram and waveforms of the selected part"></svg>
+          <p id="scope-caption" class="scope-caption"></p>
+          <p class="muted small">Click a part to scope it. The arrows rotate at ωt; their shadow on the horizontal axis is the instantaneous value.</p>
+        </section>
         <section class="card" id="answers-card" hidden>
           <h2>Answers</h2>
           <ul id="answers" class="answers"></ul>

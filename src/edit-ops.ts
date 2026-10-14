@@ -8,6 +8,7 @@ export const PREFIX: Record<ComponentKind, string> = {
   current_source: "I",
   capacitor: "C",
   inductor: "L",
+  impedance: "Z",
   vcvs: "E",
   vccs: "G",
   ccvs: "H",
@@ -20,6 +21,7 @@ export const DEFAULT_VALUE: Record<ComponentKind, number> = {
   current_source: 0.001,
   capacitor: 1e-6,
   inductor: 1e-3,
+  impedance: 10,
   vcvs: 2,
   vccs: 0.01,
   ccvs: 1000,
@@ -58,6 +60,8 @@ export function addComponent(c: Circuit, kind: ComponentKind, from: { x: number;
     ctrl_a: null,
     ctrl_b: null,
     ctrl_component: null,
+    ...(kind === "voltage_source" || kind === "current_source" ? { phase: 0 } : {}),
+    ...(kind === "impedance" ? { reactance: 10 } : {}),
   });
   normalize(c);
   return id;
@@ -105,6 +109,10 @@ export function changeKind(c: Circuit, k: Component, kind: ComponentKind): void 
   if (autoId) renameComponent(c, k.id, nextId(c, kind));
   if (kind !== "vcvs" && kind !== "vccs") k.ctrl_a = k.ctrl_b = null;
   if (kind !== "ccvs" && kind !== "cccs") k.ctrl_component = null;
+  if (kind === "impedance") k.reactance = 10;
+  else delete k.reactance;
+  if (kind === "voltage_source" || kind === "current_source") k.phase ??= 0;
+  else delete k.phase;
 }
 
 export function flipComponent(k: Component): void {

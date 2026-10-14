@@ -1,13 +1,16 @@
 import "./style.css";
 import type { Circuit, ComponentKind } from "./types";
+import { analysisOf } from "./types";
 import { analyze, buildTopology, evaluateGiven, CircuitError, type Solution } from "./solver";
 import { CircuitView } from "./render";
 import { Editor, type Tool } from "./editor";
 import { changeKind, emptyCircuit, flipComponent, renameComponent } from "./edit-ops";
 import { buildSteps, formatAsk, type Step } from "./explain";
+import { Scope } from "./scope";
 import { extractCircuit, prepareImage, ExtractError } from "./extract";
 import { EXAMPLES } from "./examples";
-import { KIND_LABEL, formatSI, formatValue, parseSI, unitFor } from "./format";
+import { KIND_LABEL, formatPhasorShort, formatRect, formatSI, formatValue, parseComplex, parseSI, unitFor } from "./format";
+import type { Complex } from "./complex";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const KEY_STORAGE = "circuit-lens.api-key";
@@ -28,6 +31,8 @@ let selectedId: string | null = null;
 
 const view = new CircuitView($<HTMLElement>("schematic") as unknown as SVGSVGElement, $("tooltip"));
 const editor = new Editor(view, () => circuit);
+const scope = new Scope($<HTMLElement>("scope-svg") as unknown as SVGSVGElement, $("scope-caption"));
+view.onFrame = (theta) => scope.frame(theta);
 editor.onChange = () => {
   normalizeSelection();
   renderEditor();
@@ -70,11 +75,18 @@ function normalize(raw: unknown): Circuit {
       ctrl_a: str(k.ctrl_a),
       ctrl_b: str(k.ctrl_b),
       ctrl_component: str(k.ctrl_component),
+      ...(k.phase !== undefined && k.phase !== null ? { phase: Number(k.phase) } : {}),
+      ...(k.kind === "impedance" ? { reactance: k.reactance === null || k.reactance === undefined ? null : Number(k.reactance) } : {}),
     })),
     ground: str(r.ground),
     givens: (r.givens ?? []).map((g) => ({ ...g, component: str(g.component), a: str(g.a), b: str(g.b), value: Number(g.value) })),
     asks: (r.asks ?? []).map((a) => ({ ...a, label: String(a.label), component: str(a.component), a: str(a.a), b: str(a.b) })),
     notes: String(r.notes ?? ""),
+    analysis: {
+      mode: r.analysis?.mode === "ac" ? "ac" : "dc",
+      frequency: r.analysis?.frequency ? Number(r.analysis.frequency) : null,
+      amplitude: r.analysis?.amplitude === "rms" ? "rms" : "peak",
+    },
   };
 }
 
@@ -108,6 +120,7 @@ function solve() {
   $("empty").hidden = true;
   $<HTMLTextAreaElement>("json-text").value = JSON.stringify(circuit, null, 2);
   renderResults(errors);
+  updateScope();
   steps = solution ? buildSteps(circuit, solution) : [];
   $("stepper").hidden = steps.length === 0;
   showStep(-1);
@@ -118,6 +131,7 @@ function solve() {
 function renderEditor() {
   if (!circuit) return;
   $("edit-card").hidden = false;
+  renderAnalysis();
   const tbody = $("comp-table").querySelector("tbody")!;
   tbody.replaceChildren();
   for (const k of circuit.components) {
@@ -133,6 +147,27 @@ function renderEditor() {
     input.classList.toggle("unknown", k.value === null);
     input.setAttribute("aria-label", `${k.id} value`);
     input.title = `Unit: ${unitFor(k.kind)}`;
+    if (k.kind === "impedance") {
+      input.value = k.value === null || k.reactance === null ? "?" : formatRect({ re: k.value, im: k.reactance ?? 0 }, "").replace(/\s+/g, "").replace("−", "-");
+      input.title = "Impedance R + jX in ohms, e.g. 3+j4 or -j5. Use the Selected part panel for unknowns.";
+      input.addEventListener("change", () => {
+        const z = parseComplex(input.value);
+        if (!z || Number.isNaN(z.re) || Number.isNaN(z.im)) {
+          input.classList.add("invalid");
+          return;
+        }
+        input.classList.remove("invalid", "unknown");
+        editor.snapshot();
+        k.value = z.re;
+        k.reactance = z.im;
+        solve();
+        renderProps();
+      });
+      valTd.appendChild(input);
+      tr.append(id, kind, valTd);
+      tbody.appendChild(tr);
+      continue;
+    }
     input.addEventListener("change", () => {
       const v = parseSI(input.value);
       if (Number.isNaN(v)) {
@@ -178,6 +213,48 @@ function renderEditor() {
     gt.appendChild(tr);
   }
 }
+
+// ------------------------------------------------------------------ analysis settings (DC / AC)
+
+const modeDc = $<HTMLButtonElement>("mode-dc");
+const modeAc = $<HTMLButtonElement>("mode-ac");
+const freqInput = $<HTMLInputElement>("freq");
+const ampSelect = $<HTMLSelectElement>("amplitude");
+
+function renderAnalysis() {
+  if (!circuit) return;
+  const an = analysisOf(circuit);
+  const ac = an.mode === "ac";
+  modeDc.setAttribute("aria-pressed", String(!ac));
+  modeAc.setAttribute("aria-pressed", String(ac));
+  $("ac-settings").hidden = !ac;
+  freqInput.value = an.frequency ? formatSI(an.frequency, "", 6).replace(/\s+/g, "") : "";
+  ampSelect.value = an.amplitude;
+  $("omega").textContent = an.frequency ? `ω = ${formatSI(2 * Math.PI * an.frequency, "rad/s", 4)}` : "no frequency: impedances only";
+}
+
+function setAnalysis(patch: Partial<NonNullable<Circuit["analysis"]>>) {
+  if (!circuit) return;
+  editor.snapshot();
+  circuit.analysis = { ...analysisOf(circuit), ...patch };
+  editor.onChange();
+}
+
+modeDc.addEventListener("click", () => setAnalysis({ mode: "dc" }));
+modeAc.addEventListener("click", () => {
+  const an = circuit ? analysisOf(circuit) : null;
+  setAnalysis({ mode: "ac", frequency: an?.frequency ?? 60 });
+});
+freqInput.addEventListener("change", () => {
+  const v = parseSI(freqInput.value);
+  if (v !== null && (Number.isNaN(v) || v <= 0)) {
+    freqInput.classList.add("invalid");
+    return;
+  }
+  freqInput.classList.remove("invalid");
+  setAnalysis({ frequency: v });
+});
+ampSelect.addEventListener("change", () => setAnalysis({ amplitude: ampSelect.value as "peak" | "rms" }));
 
 function valueToText(kind: ComponentKind, v: number): string {
   return unitFor(kind).includes("/") ? String(v) : formatSI(v, "", 6).replace(/\s+$/, "").replace(" ", "");
@@ -239,7 +316,8 @@ function renderResults(errors: string[]) {
     for (const k of c.components) {
       const tr = document.createElement("tr");
       tr.dataset.id = k.id;
-      for (const text of [k.id, formatSI(sol.compV[k.id], "V", 3), formatSI(sol.compI[k.id], "A", 3), formatSI(sol.compP[k.id], "W", 3)]) {
+      const q = (z: Complex, unit: string) => (sol.ac ? formatPhasorShort(z, unit) : formatSI(z.re, unit, 3));
+      for (const text of [k.id, q(sol.compV[k.id], "V"), q(sol.compI[k.id], "A"), formatSI(sol.compS[k.id].re, "W", 3)]) {
         const td = document.createElement("td");
         td.textContent = text;
         tr.appendChild(td);
@@ -278,7 +356,23 @@ view.onSelect = (id) => {
     .forEach((tr) => tr.classList.toggle("selected", (tr as HTMLElement).dataset.id === id));
   selectedId = id;
   renderProps();
+  updateScope();
 };
+
+/** The scope follows the selected part, or the first source. */
+function updateScope() {
+  const ac = !!solution?.ac;
+  $("scope-card").hidden = !ac;
+  if (!ac || !circuit) return scope.set(null, null);
+  const id =
+    (selectedId && circuit.components.some((k) => k.id === selectedId) ? selectedId : null) ??
+    circuit.components.find((k) => k.kind === "voltage_source" || k.kind === "current_source")?.id ??
+    circuit.components[0]?.id ??
+    null;
+  $("scope-title").textContent = id ? `Waveforms · ${id}` : "Waveforms";
+  const kind = circuit.components.find((k) => k.id === id)?.kind ?? "";
+  scope.set(solution, id, /source|^vc|^cc/.test(kind));
+}
 
 // ------------------------------------------------------------------ selected-part panel
 
@@ -362,7 +456,40 @@ function renderProps() {
     }
     commit(() => (k.value = v));
   });
-  grid.append(...field("value", `Value (${unitFor(k.kind)})`, value));
+  const ac = analysisOf(c).mode === "ac";
+  const isSource = k.kind === "voltage_source" || k.kind === "current_source";
+  const valueLabel = k.kind === "impedance" ? "R (Ω)" : isSource && ac ? `Amplitude (${unitFor(k.kind)})` : `Value (${unitFor(k.kind)})`;
+  grid.append(...field("value", valueLabel, value));
+
+  if (k.kind === "impedance") {
+    const x = document.createElement("input");
+    x.value = k.reactance === null || k.reactance === undefined ? "?" : valueToText(k.kind, k.reactance);
+    x.placeholder = "? = unknown";
+    x.title = "Reactance in ohms: positive = inductive (+jX), negative = capacitive (−jX).";
+    x.addEventListener("change", () => {
+      const v = parseSI(x.value);
+      if (Number.isNaN(v)) {
+        x.classList.add("invalid");
+        return;
+      }
+      commit(() => (k.reactance = v));
+    });
+    grid.append(...field("reactance", "X (Ω)", x));
+  }
+  if (isSource && ac) {
+    const ph = document.createElement("input");
+    ph.value = String(k.phase ?? 0);
+    ph.title = "Phase in degrees, cosine reference: A·cos(ωt + phase). For a sine source use phase − 90°.";
+    ph.addEventListener("change", () => {
+      const v = parseSI(ph.value);
+      if (v === null || Number.isNaN(v)) {
+        ph.classList.add("invalid");
+        return;
+      }
+      commit(() => (k.phase = v));
+    });
+    grid.append(...field("phase", "Phase (°)", ph));
+  }
 
   // Controlling quantity for dependent sources.
   if (k.kind === "vcvs" || k.kind === "vccs") {
@@ -523,8 +650,9 @@ editor.onHistory = (canUndo, canRedo) => {
 view.onLegend = (range) => {
   $("legend").hidden = !range;
   if (range) {
+    $("legend-label").textContent = range.ac ? "v(t)" : "";
     $("legend-min").textContent = formatSI(range.min, "V", 3);
-    $("legend-max").textContent = formatSI(range.max, "V", 3);
+    $("legend-max").textContent = (range.ac ? "+" : "") + formatSI(range.max, "V", 3);
   }
 };
 

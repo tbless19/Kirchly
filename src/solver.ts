@@ -1,8 +1,12 @@
-// DC circuit solver: Modified Nodal Analysis with one explicit current unknown per component,
-// plus a Levenberg-Marquardt outer loop that finds unknown component values from given quantities.
-// Steady-state DC: capacitors are open circuits, inductors are short circuits.
+// Linear circuit solver: Modified Nodal Analysis in complex arithmetic, with one explicit current
+// unknown per component, plus a Levenberg-Marquardt outer loop that finds unknown component values
+// from given quantities.
+//   - DC: steady state; capacitors are open circuits, inductors are short circuits, phases ignored.
+//   - AC: single-frequency phasor analysis; Z_C = 1/(jωC), Z_L = jωL, sources are A∠φ.
 
-import type { Ask, Circuit, Component, Given, QuantityKind } from "./types";
+import type { Analysis, Ask, Circuit, Component, Given, QuantityKind } from "./types";
+import { analysisOf } from "./types";
+import { abs, add, conj, cx, mul, polar, scale, solveComplex, sub, ZERO, type Complex } from "./complex";
 
 export class CircuitError extends Error {}
 
@@ -19,15 +23,23 @@ export interface Topology {
 
 export interface Solution {
   topology: Topology;
+  analysis: Analysis;
+  ac: boolean;
+  /** Angular frequency in rad/s (0 in DC). */
+  omega: number;
   /** Final component values (unknowns filled in). */
   values: Record<string, number>;
-  nodeVoltage: number[];
-  compV: Record<string, number>;
-  compI: Record<string, number>;
-  compP: Record<string, number>;
+  /** Final reactances of impedance parts. */
+  reactances: Record<string, number>;
+  /** Node voltages (phasors in AC; imaginary part 0 in DC). */
+  nodeV: Complex[];
+  compV: Record<string, Complex>;
+  compI: Record<string, Complex>;
+  /** Complex power absorbed, S = P + jQ (P is average power in AC). */
+  compS: Record<string, Complex>;
   /** Current through each wire (same order as circuit.wires), positive from wire.a to wire.b. */
-  wireI: number[];
-  solvedUnknowns: { id: string; value: number }[];
+  wireI: Complex[];
+  solvedUnknowns: { id: string; field: "value" | "reactance"; value: number }[];
   warnings: string[];
 }
 
@@ -101,7 +113,7 @@ export function buildTopology(c: Circuit): Topology {
 
 // ---------------------------------------------------------------- validation
 
-function validate(c: Circuit): void {
+function validate(c: Circuit, an: Analysis): void {
   if (c.components.length === 0) throw new CircuitError("The circuit has no components.");
   const pointIds = new Set(c.points.map((p) => p.id));
   const compIds = new Set<string>();
@@ -124,17 +136,26 @@ function validate(c: Circuit): void {
       }
     }
   }
+  if (an.mode === "ac" && !(an.frequency && an.frequency > 0)) {
+    const needsF = c.components.filter((k) => k.kind === "capacitor" || k.kind === "inductor");
+    if (needsF.length) {
+      throw new CircuitError(
+        `AC analysis needs a frequency for ${needsF.map((k) => k.id).join(", ")}. Set it under Analysis, ` +
+          `or give these parts as impedances (jX) instead.`,
+      );
+    }
+  }
 }
 
-// ---------------------------------------------------------------- linear algebra
+// ---------------------------------------------------------------- real linear algebra (used by LM + wires)
 
 /** Solves A x = b in place with partial pivoting. Returns null if singular. */
 export function gaussSolve(A: number[][], b: number[]): number[] | null {
   const n = b.length;
   const M = A.map((row, i) => [...row, b[i]]);
-  let scale = 0;
-  for (const row of A) for (const v of row) scale = Math.max(scale, Math.abs(v));
-  const eps = 1e-12 * (scale || 1);
+  let scaleMax = 0;
+  for (const row of A) for (const v of row) scaleMax = Math.max(scaleMax, Math.abs(v));
+  const eps = 1e-12 * (scaleMax || 1);
   for (let col = 0; col < n; col++) {
     let piv = col;
     for (let r = col + 1; r < n; r++) if (Math.abs(M[r][col]) > Math.abs(M[piv][col])) piv = r;
@@ -153,11 +174,16 @@ export function gaussSolve(A: number[][], b: number[]): number[] | null {
 // ---------------------------------------------------------------- MNA
 
 interface Raw {
-  nodeVoltage: number[];
-  compI: Record<string, number>;
+  nodeV: Complex[];
+  compI: Record<string, Complex>;
 }
 
-function solveMNA(c: Circuit, topo: Topology, values: Record<string, number>): Raw | null {
+interface Params {
+  values: Record<string, number>;
+  reactances: Record<string, number>;
+}
+
+function solveMNA(c: Circuit, topo: Topology, p: Params, ac: boolean, omega: number): Raw | null {
   const { nodeOf, nodeCount, ground } = topo;
   const vcol: number[] = [];
   let col = 0;
@@ -167,101 +193,114 @@ function solveMNA(c: Circuit, topo: Topology, values: Record<string, number>): R
   for (const k of c.components) icol.set(k.id, col++);
   const N = col;
 
-  const A: number[][] = Array.from({ length: N }, () => new Array(N).fill(0));
-  const b = new Array(N).fill(0);
-  const addV = (row: number, point: string, coef: number) => {
+  const A: Complex[][] = Array.from({ length: N }, () => new Array(N).fill(ZERO));
+  const b: Complex[] = new Array(N).fill(ZERO);
+  const put = (r: number, ci: number, v: Complex) => (A[r][ci] = add(A[r][ci], v));
+  const addV = (row: number, point: string, coef: Complex) => {
     const ci = vcol[nodeOf.get(point)!];
-    if (ci >= 0) A[row][ci] += coef;
+    if (ci >= 0) put(row, ci, coef);
   };
+  const one = cx(1);
+  const neg = cx(-1);
 
   // KCL rows: current leaving each non-ground node through components sums to zero.
   for (const k of c.components) {
     const na = vcol[nodeOf.get(k.a)!];
     const nb = vcol[nodeOf.get(k.b)!];
     const ic = icol.get(k.id)!;
-    if (na >= 0) A[na][ic] += 1;
-    if (nb >= 0) A[nb][ic] -= 1;
+    if (na >= 0) put(na, ic, one);
+    if (nb >= 0) put(nb, ic, neg);
   }
 
   // Branch rows.
   c.components.forEach((k, i) => {
     const row = nv + i;
     const ic = icol.get(k.id)!;
-    const v = values[k.id];
+    const v = p.values[k.id];
+    const vdrop = () => {
+      addV(row, k.a, one);
+      addV(row, k.b, neg);
+    };
     switch (k.kind) {
       case "resistor":
-        addV(row, k.a, 1);
-        addV(row, k.b, -1);
-        A[row][ic] -= v;
+        vdrop();
+        put(row, ic, cx(-v));
+        break;
+      case "impedance":
+        vdrop();
+        put(row, ic, cx(-v, ac ? -p.reactances[k.id] : 0));
         break;
       case "voltage_source":
-        addV(row, k.a, 1);
-        addV(row, k.b, -1);
-        b[row] = v;
+        vdrop();
+        b[row] = ac ? polar(v, k.phase ?? 0) : cx(v);
         break;
-      case "inductor": // DC: short circuit
-        addV(row, k.a, 1);
-        addV(row, k.b, -1);
+      case "inductor":
+        vdrop(); // DC: short circuit. AC: V = jωL·I
+        if (ac) put(row, ic, cx(0, -omega * v));
         break;
       case "current_source":
-        A[row][ic] = 1;
-        b[row] = v;
+        put(row, ic, one);
+        b[row] = ac ? polar(v, k.phase ?? 0) : cx(v);
         break;
-      case "capacitor": // DC: open circuit
-        A[row][ic] = 1;
+      case "capacitor":
+        put(row, ic, one); // DC: open circuit. AC: I = jωC·V
+        if (ac) {
+          addV(row, k.a, cx(0, -omega * v));
+          addV(row, k.b, cx(0, omega * v));
+        }
         break;
       case "vcvs":
-        addV(row, k.a, 1);
-        addV(row, k.b, -1);
-        addV(row, k.ctrl_a!, -v);
-        addV(row, k.ctrl_b!, v);
+        vdrop();
+        addV(row, k.ctrl_a!, cx(-v));
+        addV(row, k.ctrl_b!, cx(v));
         break;
       case "vccs":
-        A[row][ic] = 1;
-        addV(row, k.ctrl_a!, -v);
-        addV(row, k.ctrl_b!, v);
+        put(row, ic, one);
+        addV(row, k.ctrl_a!, cx(-v));
+        addV(row, k.ctrl_b!, cx(v));
         break;
       case "ccvs":
-        addV(row, k.a, 1);
-        addV(row, k.b, -1);
-        A[row][icol.get(k.ctrl_component!)!] -= v;
+        vdrop();
+        put(row, icol.get(k.ctrl_component!)!, cx(-v));
         break;
       case "cccs":
-        A[row][ic] = 1;
-        A[row][icol.get(k.ctrl_component!)!] -= v;
+        put(row, ic, one);
+        put(row, icol.get(k.ctrl_component!)!, cx(-v));
         break;
     }
   });
 
-  const x = gaussSolve(A, b);
-  if (!x || x.some((v) => !Number.isFinite(v))) return null;
-  const nodeVoltage = vcol.map((ci) => (ci < 0 ? 0 : x[ci]));
-  const compI: Record<string, number> = {};
+  const x = solveComplex(A, b);
+  if (!x || x.some((v) => !Number.isFinite(v.re) || !Number.isFinite(v.im))) return null;
+  const nodeV = vcol.map((ci) => (ci < 0 ? ZERO : x[ci]));
+  const compI: Record<string, Complex> = {};
   for (const k of c.components) compI[k.id] = x[icol.get(k.id)!];
-  return { nodeVoltage, compI };
+  return { nodeV, compI };
 }
 
 // ---------------------------------------------------------------- quantities
 
-function pointV(topo: Topology, nodeVoltage: number[], point: string): number {
+function pointV(topo: Topology, nodeV: Complex[], point: string): Complex {
   const n = topo.nodeOf.get(point);
   if (n === undefined) throw new CircuitError(`Point "${point}" is not connected to anything.`);
-  return nodeVoltage[n];
+  return nodeV[n];
 }
 
-export function measure(
-  c: Circuit,
-  topo: Topology,
-  raw: Raw,
-  q: { quantity: QuantityKind | "component_value"; component: string | null; a: string | null; b: string | null },
-  values?: Record<string, number>,
-): number {
+/** Power factor applied to V·conj(I): ½ for peak phasors, 1 for RMS phasors and for DC. */
+function powerScale(an: Analysis): number {
+  return an.mode === "ac" && an.amplitude === "peak" ? 0.5 : 1;
+}
+
+type Quantity = { quantity: QuantityKind | "component_value"; component: string | null; a: string | null; b: string | null };
+
+/** Phasor (or complex power) value of a quantity. */
+function measureComplex(c: Circuit, topo: Topology, raw: Raw, an: Analysis, q: Quantity, p?: Params): Complex {
   const comp = q.component ? c.components.find((k) => k.id === q.component) : undefined;
   const needComp = () => {
     if (!comp) throw new CircuitError(`Unknown component "${q.component}".`);
     return comp;
   };
-  const compVoltage = (k: Component) => pointV(topo, raw.nodeVoltage, k.a) - pointV(topo, raw.nodeVoltage, k.b);
+  const compVoltage = (k: Component) => sub(pointV(topo, raw.nodeV, k.a), pointV(topo, raw.nodeV, k.b));
   switch (q.quantity) {
     case "component_current":
       return raw.compI[needComp().id];
@@ -269,41 +308,73 @@ export function measure(
       return compVoltage(needComp());
     case "component_power": {
       const k = needComp();
-      return compVoltage(k) * raw.compI[k.id];
+      return scale(mul(compVoltage(k), conj(raw.compI[k.id])), powerScale(an));
     }
     case "voltage_between":
       if (!q.a || !q.b) throw new CircuitError("voltage_between needs points a and b.");
-      return pointV(topo, raw.nodeVoltage, q.a) - pointV(topo, raw.nodeVoltage, q.b);
-    case "component_value":
-      return values![needComp().id];
+      return sub(pointV(topo, raw.nodeV, q.a), pointV(topo, raw.nodeV, q.b));
+    case "component_value": {
+      const k = needComp();
+      if (k.kind === "impedance") return cx(p!.values[k.id], p!.reactances[k.id]);
+      return cx(p!.values[k.id]);
+    }
   }
+}
+
+/** The real number a given quantity is compared against: signed in DC, magnitude (or average power) in AC. */
+function scalarOf(q: Quantity, z: Complex, an: Analysis): number {
+  if (q.quantity === "component_power") return z.re;
+  return an.mode === "ac" ? abs(z) : z.re;
 }
 
 // ---------------------------------------------------------------- unknown component values
 
+interface Unknown {
+  k: Component;
+  field: "value" | "reactance";
+}
+
+function guessFor(u: Unknown, s: number): number {
+  if (u.field === "reactance") return 10 * s;
+  switch (u.k.kind) {
+    case "resistor":
+    case "impedance":
+      return 1000 * s;
+    case "capacitor":
+      return 1e-6 * s;
+    case "inductor":
+      return 1e-3 * s;
+    default:
+      return s;
+  }
+}
+
 function solveUnknowns(
   c: Circuit,
   topo: Topology,
-  unknown: Component[],
+  an: Analysis,
+  ac: boolean,
+  omega: number,
+  base: Params,
+  unknown: Unknown[],
   givens: Given[],
-): { values: Record<string, number>; raw: Raw } {
-  const base: Record<string, number> = {};
-  for (const k of c.components) if (k.value !== null) base[k.id] = k.value;
-
+): { params: Params; raw: Raw } {
+  const withP = (p: number[]): Params => {
+    const values = { ...base.values };
+    const reactances = { ...base.reactances };
+    unknown.forEach((u, i) => (u.field === "value" ? (values[u.k.id] = p[i]) : (reactances[u.k.id] = p[i])));
+    return { values, reactances };
+  };
   const residual = (p: number[]): number[] | null => {
-    const vals = { ...base };
-    unknown.forEach((k, i) => (vals[k.id] = p[i]));
-    const raw = solveMNA(c, topo, vals);
+    const raw = solveMNA(c, topo, withP(p), ac, omega);
     if (!raw) return null;
-    return givens.map((g) => (measure(c, topo, raw, g) - g.value) / Math.max(Math.abs(g.value), 1e-9));
+    return givens.map((g) => (scalarOf(g, measureComplex(c, topo, raw, an, g), an) - g.value) / Math.max(Math.abs(g.value), 1e-9));
   };
   const norm = (r: number[]) => r.reduce((s, v) => s + v * v, 0);
-
-  const guessFor = (k: Component, scale: number) => (k.kind === "resistor" ? 1000 : 1) * scale;
   const starts = [1, 0.1, 10, 0.01, 100, -1];
 
   for (const s of starts) {
-    let p = unknown.map((k) => guessFor(k, s));
+    let p = unknown.map((u) => guessFor(u, s));
     let r = residual(p);
     if (!r) continue;
     let lambda = 1e-3;
@@ -313,7 +384,7 @@ function solveUnknowns(
       const J: number[][] = givens.map(() => new Array(p.length).fill(0));
       let ok = true;
       for (let j = 0; j < p.length; j++) {
-        const h = 1e-7 * Math.max(Math.abs(p[j]), 1e-3);
+        const h = 1e-7 * Math.max(Math.abs(p[j]), Math.abs(guessFor(unknown[j], 1)) * 1e-3);
         const q = [...p];
         q[j] += h;
         const rq = residual(q);
@@ -326,10 +397,8 @@ function solveUnknowns(
       if (!ok) break;
       // (JᵀJ + λ·diag(JᵀJ)) δ = −Jᵀr
       const n = p.length;
-      const JtJ = Array.from({ length: n }, (_, a) =>
-        Array.from({ length: n }, (_, b2) => J.reduce((s, row) => s + row[a] * row[b2], 0)),
-      );
-      const Jtr = Array.from({ length: n }, (_, a) => J.reduce((s, row, i) => s + row[a] * r![i], 0));
+      const JtJ = Array.from({ length: n }, (_, a) => Array.from({ length: n }, (_, b2) => J.reduce((acc, row) => acc + row[a] * row[b2], 0)));
+      const Jtr = Array.from({ length: n }, (_, a) => J.reduce((acc, row, i) => acc + row[a] * r![i], 0));
       let improved = false;
       for (let tries = 0; tries < 30; tries++) {
         const M = JtJ.map((row, a) => row.map((v, b2) => (a === b2 ? v * (1 + lambda) + 1e-30 : v)));
@@ -350,13 +419,12 @@ function solveUnknowns(
       if (!improved) break;
     }
     if (r && Math.max(...r.map(Math.abs)) < 1e-6) {
-      const values = { ...base };
-      unknown.forEach((k, i) => (values[k.id] = p[i]));
-      return { values, raw: solveMNA(c, topo, values)! };
+      const params = withP(p);
+      return { params, raw: solveMNA(c, topo, params, ac, omega)! };
     }
   }
   throw new CircuitError(
-    `Could not find values for ${unknown.map((k) => k.id).join(", ")} that satisfy the given quantities. ` +
+    `Could not find values for ${unknown.map((u) => u.k.id).join(", ")} that satisfy the given quantities. ` +
       `Check the givens and component orientation.`,
   );
 }
@@ -366,15 +434,16 @@ function solveUnknowns(
 /**
  * Distributes each node's component currents over its wire segments so the animation can show
  * current flowing along wires. Within a node every wire is ideal, so we treat each wire segment as
- * a unit conductance and solve a small Laplacian; on tree-shaped wiring this gives the exact KCL flow.
+ * a unit conductance and solve a small Laplacian (separately for real and imaginary parts);
+ * on tree-shaped wiring this gives the exact KCL flow.
  */
-function wireCurrents(c: Circuit, topo: Topology, compI: Record<string, number>): number[] {
-  const out = new Array(c.wires.length).fill(0);
+function wireCurrents(c: Circuit, topo: Topology, compI: Record<string, Complex>): Complex[] {
+  const out: Complex[] = new Array(c.wires.length).fill(ZERO);
   // s[p] = net current point p pushes into components.
-  const s = new Map<string, number>();
+  const s = new Map<string, Complex>();
   for (const k of c.components) {
-    s.set(k.a, (s.get(k.a) ?? 0) + compI[k.id]);
-    s.set(k.b, (s.get(k.b) ?? 0) - compI[k.id]);
+    s.set(k.a, add(s.get(k.a) ?? ZERO, compI[k.id]));
+    s.set(k.b, sub(s.get(k.b) ?? ZERO, compI[k.id]));
   }
   for (const pts of topo.nodePoints) {
     if (pts.length < 2) continue;
@@ -395,13 +464,16 @@ function wireCurrents(c: Circuit, topo: Topology, compI: Record<string, number>)
     if (wires.length === 0) continue;
     // L·φ = −s, with φ[0] = 0.
     const A = L.slice(1).map((row) => row.slice(1));
-    const rhs = pts.slice(1).map((p) => -(s.get(p) ?? 0));
-    const phiRest = gaussSolve(A, rhs);
-    if (!phiRest) continue;
-    const phi = [0, ...phiRest];
+    const phiRe = gaussSolve(A, pts.slice(1).map((p) => -(s.get(p)?.re ?? 0)));
+    const phiIm = gaussSolve(A, pts.slice(1).map((p) => -(s.get(p)?.im ?? 0)));
+    if (!phiRe || !phiIm) continue;
+    const re = [0, ...phiRe];
+    const im = [0, ...phiIm];
     for (const wi of wires) {
       const w = c.wires[wi];
-      out[wi] = phi[idx.get(w.a)!] - phi[idx.get(w.b)!];
+      const i = idx.get(w.a)!;
+      const j = idx.get(w.b)!;
+      out[wi] = cx(re[i] - re[j], im[i] - im[j]);
     }
   }
   return out;
@@ -410,55 +482,91 @@ function wireCurrents(c: Circuit, topo: Topology, compI: Record<string, number>)
 // ---------------------------------------------------------------- entry point
 
 export function analyze(c: Circuit): Solution {
-  validate(c);
+  const an = analysisOf(c);
+  validate(c, an);
   const topo = buildTopology(c);
+  const ac = an.mode === "ac";
+  const omega = ac && an.frequency ? 2 * Math.PI * an.frequency : 0;
   const warnings: string[] = [];
   if (topo.nodeCount < 2) throw new CircuitError("The circuit needs at least two nodes.");
 
-  const unknown = c.components.filter((k) => k.value === null);
-  let values: Record<string, number>;
+  const unknown: Unknown[] = [];
+  const base: Params = { values: {}, reactances: {} };
+  for (const k of c.components) {
+    if (k.value === null) unknown.push({ k, field: "value" });
+    else base.values[k.id] = k.value;
+    if (k.kind === "impedance") {
+      if (k.reactance === null) {
+        if (ac) unknown.push({ k, field: "reactance" });
+        else base.reactances[k.id] = 0;
+      } else base.reactances[k.id] = k.reactance ?? 0;
+    }
+  }
+
+  let params: Params;
   let raw: Raw;
   if (unknown.length === 0) {
-    values = Object.fromEntries(c.components.map((k) => [k.id, k.value as number]));
-    if (c.givens.length > 0) {
-      warnings.push("Given quantities were not needed (no unknown component values); they are checked below instead.");
-    }
-    const r = solveMNA(c, topo, values);
+    params = base;
+    const r = solveMNA(c, topo, params, ac, omega);
     if (!r) throw singularError(c);
     raw = r;
   } else {
+    const label = (u: Unknown) => (u.field === "reactance" ? `X(${u.k.id})` : u.k.id);
     if (c.givens.length < unknown.length) {
       throw new CircuitError(
-        `${unknown.length} unknown component value(s) (${unknown.map((k) => k.id).join(", ")}) but only ` +
+        `${unknown.length} unknown value(s) (${unknown.map(label).join(", ")}) but only ` +
           `${c.givens.length} given quantity/quantities. Add a given (e.g. a measured current) for each unknown.`,
       );
     }
-    ({ values, raw } = solveUnknowns(c, topo, unknown, c.givens));
+    ({ params, raw } = solveUnknowns(c, topo, an, ac, omega, base, unknown, c.givens));
   }
 
   for (const k of c.components) {
-    if (k.kind === "resistor" && values[k.id] < 0) warnings.push(`${k.id} came out negative (${values[k.id]}).`);
+    if (["resistor", "capacitor", "inductor"].includes(k.kind) && params.values[k.id] < 0) {
+      warnings.push(`${k.id} came out negative (${params.values[k.id]}).`);
+    }
   }
-  if (c.components.some((k) => k.kind === "capacitor" || k.kind === "inductor")) {
+  if (!ac && c.components.some((k) => k.kind === "capacitor" || k.kind === "inductor")) {
     warnings.push("DC steady state: capacitors are treated as open circuits and inductors as short circuits.");
   }
+  if (!ac && c.components.some((k) => k.kind === "impedance" && k.reactance)) {
+    warnings.push("DC analysis uses only the resistance of impedances; switch to AC to include their reactance.");
+  }
+  if (ac && an.mode === "ac" && !an.frequency) {
+    warnings.push("No frequency given; the impedances are taken as stated.");
+  }
 
-  const compV: Record<string, number> = {};
-  const compP: Record<string, number> = {};
+  const ps = powerScale(an);
+  const compV: Record<string, Complex> = {};
+  const compS: Record<string, Complex> = {};
   for (const k of c.components) {
-    compV[k.id] = pointV(topo, raw.nodeVoltage, k.a) - pointV(topo, raw.nodeVoltage, k.b);
-    compP[k.id] = compV[k.id] * raw.compI[k.id];
+    compV[k.id] = sub(pointV(topo, raw.nodeV, k.a), pointV(topo, raw.nodeV, k.b));
+    compS[k.id] = scale(mul(compV[k.id], conj(raw.compI[k.id])), ps);
+  }
+  // Round-off leaves ideal L/C with ~1e-13 of the real power (and R with ~1e-13 reactive); call that zero.
+  const smax = Math.max(1e-300, ...Object.values(compS).map(abs));
+  for (const id of Object.keys(compS)) {
+    const s = compS[id];
+    compS[id] = cx(Math.abs(s.re) < 1e-9 * smax ? 0 : s.re, Math.abs(s.im) < 1e-9 * smax ? 0 : s.im);
   }
 
   return {
     topology: topo,
-    values,
-    nodeVoltage: raw.nodeVoltage,
+    analysis: an,
+    ac,
+    omega,
+    values: params.values,
+    reactances: params.reactances,
+    nodeV: raw.nodeV,
     compV,
     compI: raw.compI,
-    compP,
+    compS,
     wireI: wireCurrents(c, topo, raw.compI),
-    solvedUnknowns: unknown.map((k) => ({ id: k.id, value: values[k.id] })),
+    solvedUnknowns: unknown.map((u) => ({
+      id: u.k.id,
+      field: u.field,
+      value: u.field === "value" ? params.values[u.k.id] : params.reactances[u.k.id],
+    })),
     warnings,
   };
 }
@@ -472,10 +580,31 @@ function singularError(c: Circuit): CircuitError {
   );
 }
 
-export function evaluateAsk(c: Circuit, sol: Solution, ask: Ask): number {
-  return measure(c, sol.topology, { nodeVoltage: sol.nodeVoltage, compI: sol.compI }, ask, sol.values);
+const rawOf = (sol: Solution): Raw => ({ nodeV: sol.nodeV, compI: sol.compI });
+
+/** Phasor value (complex power for power quantities) of an asked-for quantity. */
+export function evaluateAskComplex(c: Circuit, sol: Solution, ask: Ask): Complex {
+  return measureComplex(c, sol.topology, rawOf(sol), sol.analysis, ask, { values: sol.values, reactances: sol.reactances });
 }
 
+/** Real value comparable with a Given: signed in DC; magnitude / average power in AC. */
 export function evaluateGiven(c: Circuit, sol: Solution, g: Given): number {
-  return measure(c, sol.topology, { nodeVoltage: sol.nodeVoltage, compI: sol.compI }, g);
+  return scalarOf(g, measureComplex(c, sol.topology, rawOf(sol), sol.analysis, g), sol.analysis);
+}
+
+/** Impedance of a passive part at the solution's frequency (null for sources). */
+export function impedanceOf(k: Component, sol: Solution): Complex | null {
+  const v = sol.values[k.id];
+  switch (k.kind) {
+    case "resistor":
+      return cx(v);
+    case "impedance":
+      return cx(v, sol.ac ? sol.reactances[k.id] : 0);
+    case "inductor":
+      return sol.ac ? cx(0, sol.omega * v) : cx(0);
+    case "capacitor":
+      return sol.ac ? cx(0, -1 / (sol.omega * v)) : null; // DC: open
+    default:
+      return null;
+  }
 }

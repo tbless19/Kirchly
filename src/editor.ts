@@ -21,6 +21,7 @@ const SHORTCUTS: Record<string, Tool> = {
   i: "current_source",
   c: "capacitor",
   l: "inductor",
+  z: "impedance",
   g: "ground",
   d: "delete",
 };

@@ -12,7 +12,7 @@ describe("edit-ops", () => {
     expect(c.points).toHaveLength(4);
     expect(c.components.map((k) => k.id)).toEqual(["V1", "R1", "R2"]);
     const s = analyze(c);
-    expect(s.compI.R1).toBeCloseTo(5 / 2000, 9);
+    expect(s.compI.R1.re).toBeCloseTo(5 / 2000, 9);
   });
 
   it("splits a wire when a component lands in its middle", () => {
