@@ -1,4 +1,6 @@
+import "katex/dist/katex.min.css";
 import "./style.css";
+import katex from "katex";
 import type { Circuit, ComponentKind } from "./types";
 import { analysisOf } from "./types";
 import { analyze, buildTopology, evaluateGiven, CircuitError, type Solution } from "./solver";
@@ -674,8 +676,15 @@ function showStep(i: number) {
   title.textContent = s.title;
   for (const line of s.lines) {
     const p = document.createElement("p");
-    p.textContent = line.text;
-    if (line.mono) p.className = "mono";
+    if (line.text) p.appendChild(document.createTextNode(line.text));
+    if (line.tex) {
+      const eq = document.createElement("span");
+      eq.className = "eq";
+      katex.render(line.tex, eq, { throwOnError: false, strict: false });
+      p.appendChild(eq);
+      // A line that is only an equation is centred like a displayed equation.
+      if (!line.text) p.className = "eq-line";
+    }
     body.appendChild(p);
   }
   // Re-trigger the fade animation.

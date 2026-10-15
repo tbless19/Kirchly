@@ -281,7 +281,10 @@ button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--dan
 #step-progress { height: 100%; width: 0; background: var(--accent); transition: width 0.3s; }
 .step-card h3 { color: var(--text); font-size: 1rem; margin: 0.7rem 0 0.35rem; }
 #step-body p { margin: 0.2rem 0; font-size: 0.9rem; }
-#step-body p.mono { font-family: var(--mono); font-size: 0.84rem; color: var(--accent-2); }
+#step-body .eq { color: var(--text); }
+#step-body .eq .katex { font-size: 1.08em; }
+#step-body p.eq-line { margin: 0.45rem 0; padding-left: 1rem; overflow-x: auto; overflow-y: hidden; }
+#step-body p.eq-line .katex { font-size: 1.18em; }
 .step-card { animation: fade 0.3s; }
 @keyframes fade { from { opacity: 0; transform: translateY(4px); } }
 
