@@ -142,9 +142,20 @@ export interface ExtractOptions {
 export class ExtractError extends Error {}
 
 export async function extractCircuit(opts: ExtractOptions): Promise<Circuit> {
+  return (await extractStructured(opts, SYSTEM_PROMPT, CIRCUIT_SCHEMA, "Transcribe this circuit problem into the JSON format.")) as Circuit;
+}
+
+/** Sends the image to Claude with a system prompt and a JSON schema for the reply; returns the parsed JSON. */
+export async function extractStructured(
+  opts: ExtractOptions,
+  system: string,
+  schema: Record<string, unknown>,
+  instruction: string,
+): Promise<unknown> {
   const client = new Anthropic({ apiKey: opts.apiKey, dangerouslyAllowBrowser: true });
-  const text =
-    "Transcribe this circuit problem into the JSON format." + (opts.hint.trim() ? `\n\nExtra context from the user: ${opts.hint.trim()}` : "");
+  const text = instruction + (opts.hint.trim() ? `
+
+Extra context from the user: ${opts.hint.trim()}` : "");
 
   let message;
   try {
@@ -155,8 +166,8 @@ export async function extractCircuit(opts: ExtractOptions): Promise<Circuit> {
         betas: ["server-side-fallback-2026-07-01"],
         fallbacks: "default",
         thinking: { type: "adaptive" },
-        output_config: { effort: "high", format: { type: "json_schema", schema: CIRCUIT_SCHEMA } },
-        system: SYSTEM_PROMPT,
+        output_config: { effort: "high", format: { type: "json_schema", schema } },
+        system,
         messages: [
           {
             role: "user",
@@ -181,13 +192,13 @@ export async function extractCircuit(opts: ExtractOptions): Promise<Circuit> {
   }
 
   if (message.stop_reason === "refusal") throw new ExtractError("The model declined to read this image.");
-  if (message.stop_reason === "max_tokens") throw new ExtractError("The response was cut off; try a tighter crop of the circuit.");
+  if (message.stop_reason === "max_tokens") throw new ExtractError("The response was cut off; try a tighter crop of the problem.");
   const json = message.content
     .filter((b) => b.type === "text")
     .map((b) => (b as { text: string }).text)
     .join("");
   try {
-    return JSON.parse(json) as Circuit;
+    return JSON.parse(json);
   } catch {
     throw new ExtractError("The model returned malformed JSON.");
   }

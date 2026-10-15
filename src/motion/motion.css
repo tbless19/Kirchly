@@ -1,0 +1,79 @@
+/* ---------- app modes ---------- */
+body[data-app="circuit"] .motion-only,
+body[data-app="motion"] .circuit-only { display: none !important; }
+.app-mode button { padding: 0.35rem 1rem; }
+
+/* ---------- motion ---------- */
+#motion-svg { width: 100%; height: 100%; min-height: 380px; display: block; }
+.canvas-wrap .caption { position: absolute; left: 12px; bottom: 6px; right: 12px; margin: 0; font-size: 0.78rem; color: var(--muted); pointer-events: none; }
+.time-slider { flex: 1; min-width: 120px; padding: 0; }
+.clock { font: 0.8rem var(--mono); color: var(--muted); }
+.motion-vars td { padding: 0.18rem 0.25rem; }
+.motion-vars td:first-child { font-weight: 400; white-space: nowrap; }
+.motion-vars .var-name { font-size: 0.76rem; line-height: 1.2; }
+.motion-vars td:nth-child(3) { display: flex; align-items: center; gap: 0.25rem; }
+.motion-vars td:nth-child(3) input { width: 100%; min-width: 0; }
+.motion-vars input.solved::placeholder { color: var(--accent-2); opacity: 0.9; }
+.motion-vars input.assumed { border-style: dashed; }
+.motion-vars .unit { font: 0.72rem var(--mono); color: var(--muted); min-width: 2.6em; }
+.motion-vars td:last-child { text-align: center; }
+
+#motion-svg .scene-empty { fill: var(--muted); font-size: 15px; }
+#motion-svg .scene-text { fill: var(--text); font-size: 12.5px; }
+#motion-svg .scene-text.dim, #motion-svg .scene-readout.dim { fill: var(--muted); }
+.canvas-wrap .readout { position: absolute; top: 10px; left: 12px; right: 12px; pointer-events: none; }
+.readout .scene-readout { font: 0.8rem var(--mono); color: var(--text); background: color-mix(in srgb, var(--panel) 80%, transparent); display: inline-block; padding: 0.1rem 0.4rem; border-radius: 6px; margin-bottom: 0.2rem; }
+.readout .scene-readout.dim { color: var(--muted); display: block; width: fit-content; }
+#motion-svg .ground { stroke: var(--muted); stroke-width: 2.5; }
+#motion-svg .wall { stroke: var(--muted); stroke-width: 5; }
+#motion-svg .ruler, #motion-svg .dim { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; fill: none; }
+#motion-svg .cliff, #motion-svg .wedge { fill: color-mix(in srgb, var(--muted) 22%, var(--panel)); stroke: var(--muted); stroke-width: 1.5; }
+#motion-svg .track { fill: none; stroke: var(--text); stroke-width: 3; }
+#motion-svg .trajectory { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 5 5; }
+#motion-svg .orbit-path { fill: none; stroke: var(--border); stroke-width: 2; stroke-dasharray: 6 5; }
+#motion-svg .trail { fill: none; stroke: var(--accent); stroke-width: 2.5; opacity: 0.7; }
+#motion-svg .ball { fill: var(--accent); stroke: color-mix(in srgb, var(--accent) 60%, #000); stroke-width: 1.5; }
+#motion-svg .body { fill: color-mix(in srgb, var(--accent-2) 35%, var(--panel)); stroke: var(--accent-2); stroke-width: 2; }
+#motion-svg .body.alt { fill: color-mix(in srgb, var(--accent) 30%, var(--panel)); stroke: var(--accent); }
+#motion-svg .body.disk { fill: color-mix(in srgb, var(--accent-2) 22%, var(--panel)); }
+#motion-svg .hoop { fill: none; stroke: var(--accent-2); stroke-width: 9; }
+#motion-svg .spoke { stroke: var(--accent-2); stroke-width: 2; }
+#motion-svg .marker { fill: var(--accent); }
+#motion-svg .wheel { fill: var(--text); }
+#motion-svg .car .body { fill: var(--accent); stroke: none; }
+#motion-svg .rope { stroke: var(--text); stroke-width: 2; fill: none; }
+#motion-svg .spring { stroke: var(--text); stroke-width: 2; fill: none; stroke-linejoin: round; }
+#motion-svg .pulley { fill: var(--panel-2); stroke: var(--text); stroke-width: 2.5; }
+#motion-svg .planet { fill: #2563eb; stroke: #60a5fa; stroke-width: 2; }
+#motion-svg .centre { fill: var(--muted); }
+#motion-svg .mass-label { fill: var(--text); font: 600 13px var(--mono); }
+#motion-svg .ebar-0 { fill: var(--accent-2); }
+#motion-svg .ebar-1 { fill: var(--accent); }
+#motion-svg .ebar-2 { fill: var(--muted); }
+#motion-svg .arrow line { stroke-width: 3; stroke-linecap: round; }
+#motion-svg .arrow-label { font: 600 12px var(--mono); }
+#motion-svg .arrow-v line { stroke: #22c55e; }
+#motion-svg .arrow-v path, #motion-svg .arrow-v text { fill: #22c55e; }
+#motion-svg .arrow-a line { stroke: #f43f5e; }
+#motion-svg .arrow-a path, #motion-svg .arrow-a text { fill: #f43f5e; }
+#motion-svg .arrow-comp line { stroke: #22c55e; stroke-width: 1.5; stroke-dasharray: 4 3; opacity: 0.7; }
+#motion-svg .arrow-comp path, #motion-svg .arrow-comp text { fill: #22c55e; opacity: 0.7; }
+#motion-svg .arrow-w line { stroke: #a78bfa; }
+#motion-svg .arrow-w path, #motion-svg .arrow-w text { fill: #a78bfa; }
+#motion-svg .arrow-f line { stroke: #38bdf8; }
+#motion-svg .arrow-f path, #motion-svg .arrow-f text { fill: #38bdf8; }
+#motion-svg .arrow-fr line { stroke: #f97316; }
+#motion-svg .arrow-fr path, #motion-svg .arrow-fr text { fill: #f97316; }
+#motion-svg .arrow-app line { stroke: #eab308; }
+#motion-svg .arrow-app path, #motion-svg .arrow-app text { fill: #eab308; }
+
+.graphs { width: 100%; height: auto; display: block; }
+.graphs .graph-title { fill: var(--text); font-size: 11px; font-weight: 600; }
+.graphs .graph-axis { stroke: var(--border); stroke-width: 1; }
+.graphs .graph-tick { fill: var(--muted); font: 9px var(--mono); }
+.graphs .graph-line { fill: none; stroke-width: 2; }
+.graphs path.graph-0 { stroke: var(--accent); }
+.graphs path.graph-1 { stroke: var(--accent-2); }
+.graphs circle.graph-0 { fill: var(--accent); }
+.graphs circle.graph-1 { fill: var(--accent-2); }
+.graphs .graph-cursor { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 3; }

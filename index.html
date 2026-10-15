@@ -3,19 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Upload a photo of a circuit problem and watch it solved with animated current flow." />
-    <title>Circuit Lens</title>
+    <meta name="description" content="Upload a photo of a circuit or physics problem and watch it solved: animated current flow, projectiles, forces, rotation and more." />
+    <title>Ohmentum</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><path d='M2 16h6l3-8 5 16 5-16 3 8h6' fill='none' stroke='%23fb923c' stroke-width='3' stroke-linejoin='round'/></svg>" />
   </head>
-  <body>
+  <body data-app="circuit">
     <header class="topbar">
       <div class="brand">
         <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M2 16h6l3-8 5 16 5-16 3 8h6" /></svg>
-        <span>Circuit Lens</span>
+        <span>Ohmentum</span>
+      </div>
+      <div class="segmented app-mode" role="group" aria-label="What to solve">
+        <button type="button" data-app="circuit" aria-pressed="true">Circuits</button>
+        <button type="button" data-app="motion" aria-pressed="false">Motion</button>
       </div>
       <div class="topbar-actions">
-        <button id="new-btn" class="ghost" type="button" title="Start a blank circuit">New</button>
-        <select id="example-select" aria-label="Load an example circuit">
+        <button id="new-btn" class="ghost circuit-only" type="button" title="Start a blank circuit">New</button>
+        <select id="example-select" aria-label="Load an example">
           <option value="">Load example…</option>
         </select>
         <button id="settings-btn" class="ghost" type="button">API key</button>
@@ -24,27 +28,27 @@
 
     <main class="layout">
       <aside class="panel left">
-        <section class="card props-card" id="props-card" hidden>
+        <section class="card props-card circuit-only" id="props-card" hidden>
           <h2>Selected part</h2>
           <div id="props-body"></div>
         </section>
 
         <section class="card">
-          <h2>1 · Upload a circuit</h2>
+          <h2>1 · Upload a problem</h2>
           <label id="dropzone" class="dropzone" tabindex="0">
             <input id="file-input" type="file" accept="image/*" hidden />
             <img id="preview" alt="Uploaded circuit" hidden />
-            <span id="drop-hint">Drop, paste, or click to choose a photo of a circuit problem</span>
+            <span id="drop-hint">Drop, paste, or click to choose a photo of a <span class="circuit-only">circuit</span><span class="motion-only">physics</span> problem</span>
           </label>
           <textarea id="hint" rows="2" placeholder="Optional: anything the photo doesn't show (e.g. “solve problem 3b”)"></textarea>
           <div class="row">
-            <button id="read-btn" type="button" disabled>Read circuit</button>
+            <button id="read-btn" type="button" disabled>Read problem</button>
             <button id="cancel-btn" type="button" class="ghost" hidden>Cancel</button>
           </div>
           <p id="status" class="status" role="status"></p>
         </section>
 
-        <section class="card" id="edit-card" hidden>
+        <section class="card circuit-only" id="edit-card" hidden>
           <h2>2 · Check the values</h2>
           <div class="analysis" role="group" aria-label="Analysis type">
             <div class="segmented">
@@ -75,10 +79,29 @@
             <button id="json-apply" type="button" class="ghost">Apply JSON</button>
           </details>
         </section>
+
+        <section class="card motion-only" id="motion-card" hidden>
+          <h2>2 · Check the problem</h2>
+          <div class="props-grid">
+            <label for="m-type">Type</label><select id="m-type"></select>
+            <label for="m-variant">Situation</label><select id="m-variant"></select>
+          </div>
+          <p class="muted small">Leave a value blank or type <code>?</code> if it's unknown; solved values appear in blue. Units are optional: 72 km/h, 35°, 300 rpm, 50 cm. Tick <b>Find</b> for what the question asks.</p>
+          <table class="edit-table motion-vars" id="m-vars">
+            <thead><tr><th></th><th>Quantity</th><th>Value</th><th>Find</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </section>
       </aside>
 
       <section class="stage">
-        <div class="toolbar">
+        <div class="toolbar motion-only">
+          <button id="m-play" type="button" class="ghost">Pause</button>
+          <input id="m-time" type="range" min="0" max="1000" value="0" aria-label="Time" class="time-slider" />
+          <span id="m-clock" class="clock"></span>
+          <label class="inline">Speed <input id="m-speed" type="range" min="0.1" max="3" step="0.1" value="1" /></label>
+        </div>
+        <div class="toolbar circuit-only">
           <button id="edit-toggle" type="button" class="ghost" aria-pressed="false">✎ Edit circuit</button>
           <button id="flow-toggle" type="button" class="ghost" aria-pressed="true">Pause flow</button>
           <label class="inline">Speed <input id="speed" type="range" min="0.2" max="3" step="0.1" value="1" /></label>
@@ -86,7 +109,7 @@
           <label class="inline"><input id="labels" type="checkbox" checked /> Labels</label>
           <label class="inline"><input id="vcolor" type="checkbox" checked /> Voltage colors</label>
         </div>
-        <div class="edit-toolbar" id="edit-toolbar" role="toolbar" aria-label="Circuit editing tools" hidden>
+        <div class="edit-toolbar circuit-only" id="edit-toolbar" role="toolbar" aria-label="Circuit editing tools" hidden>
           <button type="button" class="tool" data-tool="select" title="Select / move (S)">Select<kbd>S</kbd></button>
           <button type="button" class="tool" data-tool="wire" title="Wire (W)">Wire<kbd>W</kbd></button>
           <button type="button" class="tool" data-tool="resistor" title="Resistor (R)">Resistor<kbd>R</kbd></button>
@@ -109,13 +132,19 @@
           <button type="button" id="redo-btn" class="ghost" title="Redo (Ctrl+Y)" disabled>↷ Redo</button>
         </div>
         <div class="canvas-wrap">
-          <svg id="schematic" role="img" aria-label="Circuit schematic"></svg>
+          <svg id="schematic" class="circuit-only" role="img" aria-label="Circuit schematic"></svg>
+          <svg id="motion-svg" class="motion-only" role="img" aria-label="Animation of the motion"></svg>
+          <div id="motion-empty" class="empty motion-only">
+            <p>Upload a photo of a physics problem, or load an example: projectiles, ramps, pulleys, circular motion, rotation, energy, collisions, springs.</p>
+          </div>
+          <p id="m-caption" class="caption motion-only"></p>
+          <div id="m-readout" class="readout motion-only" aria-live="off"></div>
           <div id="edit-hint" class="edit-hint" hidden></div>
-          <div id="empty" class="empty">
+          <div id="empty" class="empty circuit-only">
             <p>Upload a circuit photo, or load an example to see how it works.</p>
           </div>
           <div id="tooltip" class="tooltip" hidden></div>
-          <div id="legend" class="legend" hidden>
+          <div id="legend" class="legend circuit-only" hidden>
             <span id="legend-label"></span><span id="legend-min"></span><div class="ramp"></div><span id="legend-max"></span>
           </div>
         </div>
@@ -135,17 +164,21 @@
       </section>
 
       <aside class="panel right">
-        <section class="card" id="scope-card" hidden>
+        <section class="card circuit-only" id="scope-card" hidden>
           <h2 id="scope-title">Waveforms</h2>
           <svg id="scope-svg" class="scope" role="img" aria-label="Phasor diagram and waveforms of the selected part"></svg>
           <p id="scope-caption" class="scope-caption"></p>
           <p class="muted small">Click a part to scope it. The arrows rotate at ωt; their shadow on the horizontal axis is the instantaneous value.</p>
         </section>
+        <section class="card motion-only" id="graphs-card" hidden>
+          <h2>Graphs</h2>
+          <svg id="graphs-svg" class="graphs" role="img" aria-label="Graphs of the motion over time"></svg>
+        </section>
         <section class="card" id="answers-card" hidden>
           <h2>Answers</h2>
           <ul id="answers" class="answers"></ul>
         </section>
-        <section class="card" id="results-card" hidden>
+        <section class="card circuit-only" id="results-card" hidden>
           <h2>Every component</h2>
           <table class="results" id="results">
             <thead><tr><th>Part</th><th>V</th><th>I</th><th>P</th></tr></thead>

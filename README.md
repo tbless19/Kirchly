@@ -1,6 +1,10 @@
-# Circuit Lens
+# Ohmentum
 
-Upload a photo of a circuit problem and Circuit Lens solves it. It shows animated current flow, colors nodes by voltage, and walks through the solution step by step.
+Upload a photo of a circuit or physics problem and Ohmentum solves it, animates it, and walks through the solution step by step. The name is Ohm (circuits) plus momentum (mechanics).
+
+## Circuits mode
+
+Shows animated current flow and colors nodes by voltage.
 
 - **Reads the picture:** Claude's vision model turns the photo into a netlist (components, values, unknowns, given quantities, layout).
 - **Solves locally:** Modified Nodal Analysis finds every node voltage and component current. Unknown component values are solved from the given quantities, e.g. "find Rx if I = 2 mA".
@@ -15,6 +19,24 @@ Supported parts: resistors, capacitors, inductors, impedances (R + jX), independ
 
 Transients and op-amps aren't supported yet.
 
+## Motion mode
+
+Switch to **Motion** (top bar) for physics problems. Upload a photo or pick an example; the same solve → animate → walkthrough flow applies.
+
+| Type | Situations |
+|---|---|
+| 1D motion | constant acceleration (cars, runners), free fall |
+| Projectiles | any launch angle, from a height, landing on a ledge |
+| Inclined planes | sliding down or pushed up, with friction and an applied force |
+| Pulleys | Atwood machine, block on a table with a hanging mass |
+| Circular motion | string tension, flat curve (friction), banked curve, top/bottom of a vertical loop, orbits |
+| Rotation | angular kinematics, torque, moment of inertia (disk, hoop, spheres, rods, point mass), rotational KE |
+| Energy and work | conservation of energy, friction, springs |
+| Collisions | 1D elastic, perfectly inelastic, coefficient of restitution |
+| Oscillations | mass on a spring, simple pendulum |
+
+Each type is a set of variables and equations (`src/motion/models.ts`). The solver works like a student: it repeatedly solves an equation with one unknown, solves 2–4 equations simultaneously when it has to, flags given values that contradict each other, and notes when an equation has more than one answer (e.g. the two launch angles with the same range). Inputs accept units: `72 km/h`, `35°`, `300 rpm`, `50 cm`.
+
 ## API key
 
 Reading photos calls the Anthropic API from the browser with the visitor's own key. It is entered under **API key** and kept only in that browser's local storage. Because the site is static, there is no server that could hold a key. The built-in examples and manual JSON editing work without a key.
@@ -28,7 +50,7 @@ npm test         # solver unit tests
 npm run build    # static site in dist/
 ```
 
-Open `?example=0` … `?example=6` to load an example directly (4–6 are AC).
+Open `?example=0` … `?example=6` to load a circuit example directly (4–6 are AC), or `?mode=motion&example=0` … `16` for motion.
 
 ## Deploy to GitHub Pages
 
@@ -48,3 +70,4 @@ Open `?example=0` … `?example=6` to load an example directly (4–6 are AC).
 | `src/explain.ts` | Step-by-step walkthrough |
 | `src/main.ts` | UI wiring |
 | `src/examples.ts` | Built-in example circuits |
+| `src/motion/` | Motion mode: models, solver, scenes, walkthrough, extraction, examples |

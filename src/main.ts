@@ -1,5 +1,6 @@
 import "katex/dist/katex.min.css";
 import "./style.css";
+import "./motion/motion.css";
 import katex from "katex";
 import type { Circuit, ComponentKind } from "./types";
 import { analysisOf } from "./types";
@@ -11,11 +12,14 @@ import { buildSteps, formatAsk, type Step } from "./explain";
 import { Scope } from "./scope";
 import { extractCircuit, prepareImage, ExtractError } from "./extract";
 import { EXAMPLES } from "./examples";
+import { initMotion } from "./motion/ui";
+import { MOTION_EXAMPLES } from "./motion/examples";
+import { extractMotion } from "./motion/extract";
 import { KIND_LABEL, formatPhasorShort, formatRect, formatSI, formatValue, parseComplex, parseSI, unitFor } from "./format";
 import type { Complex } from "./complex";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
-const KEY_STORAGE = "circuit-lens.api-key";
+const KEY_STORAGE = "ohmentum.api-key";
 const STEP_MS = 3200;
 
 // ------------------------------------------------------------------ state
@@ -27,6 +31,7 @@ let stepIndex = -1;
 let stepTimer: number | undefined;
 let image: { base64: string; mediaType: "image/jpeg"; url: string } | null = null;
 let abort: AbortController | null = null;
+migrateStorage();
 let apiKey = safeGet(KEY_STORAGE) ?? "";
 
 let selectedId: string | null = null;
@@ -41,6 +46,15 @@ editor.onChange = () => {
   solve();
   renderProps();
 };
+
+/** Carries settings over from when the app was called Circuit Lens. */
+function migrateStorage() {
+  for (const key of ["api-key", "mode"]) {
+    const old = safeGet(`circuit-lens.${key}`);
+    if (old !== null && safeGet(`ohmentum.${key}`) === null) safeSet(`ohmentum.${key}`, old);
+    if (old !== null) safeSet(`circuit-lens.${key}`, null);
+  }
+}
 
 function safeGet(k: string): string | null {
   try {
@@ -666,7 +680,7 @@ function showStep(i: number) {
   const body = $("step-body");
   body.replaceChildren();
   if (i < 0 || i >= steps.length) {
-    title.textContent = solution ? "Solved. Press play for a step-by-step walkthrough." : "";
+    title.textContent = steps.length ? "Solved. Press play for a step-by-step walkthrough." : "";
     $("step-count").textContent = `${steps.length} steps`;
     $<HTMLElement>("step-progress").style.width = "0";
     view.setHighlight(null);
@@ -751,22 +765,75 @@ if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
 // ------------------------------------------------------------------ examples
 
 const exampleSelect = $<HTMLSelectElement>("example-select");
-EXAMPLES.forEach((ex, i) => {
-  const o = document.createElement("option");
-  o.value = String(i);
-  o.textContent = ex.title;
-  exampleSelect.appendChild(o);
-});
+
+function fillExamples() {
+  exampleSelect.replaceChildren(option("", "Load example…"));
+  const list = appMode === "motion" ? MOTION_EXAMPLES : EXAMPLES;
+  list.forEach((ex, i) => exampleSelect.appendChild(option(String(i), ex.title)));
+}
+
+function loadExample(i: number) {
+  if (appMode === "motion") {
+    if (!MOTION_EXAMPLES[i]) return;
+    motion.load(MOTION_EXAMPLES[i]);
+    setStatus(`Loaded example: ${MOTION_EXAMPLES[i].title}`);
+  } else {
+    if (!EXAMPLES[i]) return;
+    loadCircuit(structuredClone(EXAMPLES[i]));
+    setStatus(`Loaded example: ${EXAMPLES[i].title}`);
+  }
+}
+
 exampleSelect.addEventListener("change", () => {
   if (exampleSelect.value === "") return;
-  loadCircuit(structuredClone(EXAMPLES[Number(exampleSelect.value)]));
-  setStatus(`Loaded example: ${EXAMPLES[Number(exampleSelect.value)].title}`);
+  loadExample(Number(exampleSelect.value));
   exampleSelect.value = "";
 });
 
-// ?example=N opens an example directly (handy for sharing a demo link).
-const exampleParam = new URLSearchParams(location.search).get("example");
-if (exampleParam !== null && EXAMPLES[Number(exampleParam)]) loadCircuit(structuredClone(EXAMPLES[Number(exampleParam)]));
+// ------------------------------------------------------------------ app mode: circuits / motion
+
+const motion = initMotion({
+  setSteps(next) {
+    stopWalkthrough();
+    steps = next;
+    $("stepper").hidden = steps.length === 0;
+    showStep(-1);
+  },
+});
+
+type AppMode = "circuit" | "motion";
+const MODE_STORAGE = "ohmentum.mode";
+let appMode: AppMode = "circuit";
+
+function setAppMode(mode: AppMode) {
+  if (mode !== "circuit" && editor.active) setEditMode(false);
+  stopWalkthrough();
+  appMode = mode;
+  document.body.dataset.app = mode;
+  document.querySelectorAll<HTMLButtonElement>(".app-mode button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.app === mode)));
+  safeSet(MODE_STORAGE, mode);
+  fillExamples();
+  if (mode === "motion") {
+    motion.refresh();
+  } else if (circuit) {
+    solve();
+  } else {
+    $("answers-card").hidden = true;
+    $("notes-card").hidden = true;
+    steps = [];
+    $("stepper").hidden = true;
+  }
+  if (image) setStatus(apiKey ? "Ready. Press “Read problem”." : "Add your API key (top right) to read the photo.");
+}
+
+document.querySelectorAll<HTMLButtonElement>(".app-mode button").forEach((b) =>
+  b.addEventListener("click", () => setAppMode(b.dataset.app as AppMode)),
+);
+
+// ?mode=motion&example=N opens an example directly (handy for sharing a demo link).
+const params = new URLSearchParams(location.search);
+setAppMode(params.get("mode") === "motion" || (!params.has("mode") && safeGet(MODE_STORAGE) === "motion") ? "motion" : "circuit");
+if (params.get("example") !== null) loadExample(Number(params.get("example")));
 
 // ------------------------------------------------------------------ JSON editor
 
@@ -801,7 +868,7 @@ async function acceptFile(file: File | Blob | null | undefined) {
   img.hidden = false;
   $("drop-hint").hidden = true;
   readBtn.disabled = false;
-  setStatus(apiKey ? "Ready. Press “Read circuit”." : "Add your API key (top right) to read the photo.");
+  setStatus(apiKey ? "Ready. Press “Read problem”." : "Add your API key (top right) to read the photo.");
 }
 
 fileInput.addEventListener("change", () => acceptFile(fileInput.files?.[0]));
@@ -835,8 +902,20 @@ readBtn.addEventListener("click", async () => {
   abort = new AbortController();
   readBtn.disabled = true;
   $("cancel-btn").hidden = false;
-  setStatus("Reading the circuit… this can take up to a minute.", "working");
+  setStatus("Reading the problem… this can take up to a minute.", "working");
   try {
+    if (appMode === "motion") {
+      const p = await extractMotion({
+        apiKey,
+        imageBase64: image.base64,
+        mediaType: image.mediaType,
+        hint: $<HTMLTextAreaElement>("hint").value,
+        signal: abort.signal,
+      });
+      motion.load(p);
+      setStatus(`Read “${p.title}”. Check the values on the left; edits re-solve instantly.`);
+      return;
+    }
     const c = normalize(
       await extractCircuit({
         apiKey,
@@ -878,7 +957,7 @@ dialog.addEventListener("close", () => {
   apiKey = keyInput.value.trim();
   safeSet(KEY_STORAGE, $<HTMLInputElement>("remember-key").checked && apiKey ? apiKey : null);
   updateKeyButton();
-  if (image) setStatus(apiKey ? "Ready. Press “Read circuit”." : "Add your API key to read the photo.");
+  if (image) setStatus(apiKey ? "Ready. Press “Read problem”." : "Add your API key to read the photo.");
 });
 $("clear-key").addEventListener("click", () => {
   apiKey = "";
@@ -893,4 +972,4 @@ function updateKeyButton() {
 updateKeyButton();
 
 // Expose for debugging in the console.
-Object.assign(window, { circuitLens: { get circuit() { return circuit; }, get solution() { return solution; }, formatValue } });
+Object.assign(window, { ohmentum: { get circuit() { return circuit; }, get solution() { return solution; }, formatValue } });
