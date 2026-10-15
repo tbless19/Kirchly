@@ -18,6 +18,11 @@ export const MOTION_EXAMPLES: Problem[] = [
     "A car moving at 20 m/s brakes at 5 m/s²."),
   P("Ball dropped from a building", "kinematics_1d", "free_fall", { v0: 0, d: -45 }, [["Time to hit the ground", "t"], ["Impact velocity", "v"]],
     "Dropped from rest, 45 m above the ground."),
+  {
+    ...P("Pop fly (US units)", "projectile", "standard", { v0: 80 * 0.3048, theta: 70, h0: 4 * 0.3048 }, [["Maximum height", "H"], ["Hang time", "t"], ["Distance from home plate", "R"]],
+      "Hit at 80 ft/s, 70° above horizontal, from 4 ft off the ground."),
+    units: "imperial",
+  },
   P("Soccer kick", "projectile", "standard", { v0: 20, theta: 35 }, [["Range", "R"], ["Maximum height", "H"], ["Time of flight", "t"]]),
   P("Thrown horizontally off a cliff", "projectile", "standard", { v0: 15, theta: 0, h0: 20 }, [["Time to land", "t"], ["Distance from the cliff", "R"], ["Landing speed", "vL"]]),
   P("Block sliding down a ramp", "incline", "down", { m: 10, theta: 30, mu: 0.2, v0: 0, d: 5 }, [["Acceleration", "a"], ["Time to reach the bottom", "t"], ["Speed at the bottom", "v"]]),

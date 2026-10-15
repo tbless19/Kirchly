@@ -210,7 +210,7 @@ class GraphPanel {
     this.svg.setAttribute("viewBox", `0 0 ${W} ${H * graphs.length}`);
     graphs.forEach((g, i) => {
       const top = i * H;
-      const x0 = 50;
+      const x0 = 62;
       const x1 = W - 6;
       const y0 = top + 18;
       const y1 = top + H - 14;

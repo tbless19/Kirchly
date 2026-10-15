@@ -7,7 +7,7 @@ import { solveProblem, MotionError, type MotionSolution, type Problem } from "./
 import { buildMotionSteps } from "./explain";
 import { buildScene } from "./scenes";
 import { MotionView } from "./view";
-import { formatQuantity, formatNumber, parseQuantity, unitOf } from "./units";
+import { formatQuantity, formatNumber, parseQuantity, setUnitSystem, toDisplay, unitOf, unitSystem, type UnitSystem } from "./units";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -45,6 +45,30 @@ export function initMotion(deps: MotionDeps): MotionUI {
   const playBtn = $<HTMLButtonElement>("m-play");
   const timeSlider = $<HTMLInputElement>("m-time");
   const clock = $("m-clock");
+
+  // Metric / imperial display, remembered per browser.
+  const UNITS_STORAGE = "ohmentum.units";
+  const unitButtons = document.querySelectorAll<HTMLButtonElement>(".units button");
+  function setUnits(s: UnitSystem, remember = true) {
+    setUnitSystem(s);
+    unitButtons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.units === s)));
+    if (remember) {
+      try {
+        localStorage.setItem(UNITS_STORAGE, s);
+      } catch {
+        /* storage unavailable */
+      }
+    }
+    if (problem) update(false);
+  }
+  unitButtons.forEach((b) => b.addEventListener("click", () => setUnits(b.dataset.units as UnitSystem)));
+  let saved: string | null = null;
+  try {
+    saved = localStorage.getItem(UNITS_STORAGE);
+  } catch {
+    /* storage unavailable */
+  }
+  setUnits(saved === "imperial" ? "imperial" : "metric", false);
 
   for (const m of MODELS) {
     const o = document.createElement("option");
@@ -119,9 +143,9 @@ export function initMotion(deps: MotionDeps): MotionUI {
       const input = document.createElement("input");
       const given = problem.values[d.key];
       const known = solution.values[d.key];
-      input.value = typeof given === "number" ? inputText(given) : "";
+      input.value = typeof given === "number" ? inputText(toDisplay(given, d.dim)) : "";
       const assumed = !(d.key in problem.values) && d.default !== undefined;
-      input.placeholder = known !== undefined ? `= ${formatNumber(known, 4)}` : "?";
+      input.placeholder = known !== undefined ? `= ${formatNumber(toDisplay(known, d.dim), 4)}` : "?";
       input.classList.toggle("solved", typeof given !== "number" && known !== undefined);
       input.classList.toggle("assumed", assumed);
       input.title =
@@ -230,6 +254,8 @@ export function initMotion(deps: MotionDeps): MotionUI {
   return {
     load(p) {
       problem = structuredClone(p);
+      // A problem written in US units switches the display to match.
+      if (p.units && p.units !== unitSystem()) setUnits(p.units);
       typeSel.value = problem.type;
       fillVariants();
       $("motion-card").hidden = false;

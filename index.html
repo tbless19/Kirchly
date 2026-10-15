@@ -81,12 +81,18 @@
         </section>
 
         <section class="card motion-only" id="motion-card" hidden>
-          <h2>2 · Check the problem</h2>
+          <div class="card-head">
+            <h2>2 · Check the problem</h2>
+            <div class="segmented units" role="group" aria-label="Units">
+              <button type="button" data-units="metric" aria-pressed="true">Metric</button>
+              <button type="button" data-units="imperial" aria-pressed="false">Imperial</button>
+            </div>
+          </div>
           <div class="props-grid">
             <label for="m-type">Type</label><select id="m-type"></select>
             <label for="m-variant">Situation</label><select id="m-variant"></select>
           </div>
-          <p class="muted small">Leave a value blank or type <code>?</code> if it's unknown; solved values appear in blue. Units are optional: 72 km/h, 35°, 300 rpm, 50 cm. Tick <b>Find</b> for what the question asks.</p>
+          <p class="muted small">Leave a value blank or type <code>?</code> if it's unknown; solved values appear in blue. Units are optional: 72 km/h, 60 mph, 35°, 300 rpm, 6 in. Tick <b>Find</b> for what the question asks.</p>
           <table class="edit-table motion-vars" id="m-vars">
             <thead><tr><th></th><th>Quantity</th><th>Value</th><th>Find</th></tr></thead>
             <tbody></tbody>

@@ -5,6 +5,7 @@
 
 import type { Eq, ModelSpec, MotionType, Values, VarDef } from "./models";
 import { modelOf } from "./models";
+import { formatQuantity } from "./units";
 
 export interface Problem {
   title: string;
@@ -14,6 +15,8 @@ export interface Problem {
   values: Record<string, number | null>;
   asks: { label: string; key: string }[];
   notes: string;
+  /** Units the problem is written in; the display switches to match when it loads. */
+  units?: "metric" | "imperial";
 }
 
 export type SolveStep =
@@ -283,7 +286,7 @@ export function solveProblem(p: Problem): MotionSolution {
       values[d.key] = v;
       given.add(d.key);
       if ((d.min !== undefined && v < d.min - 1e-12) || (d.max !== undefined && v > d.max + 1e-12)) {
-        warnings.push(`${d.label} = ${v} is outside the physical range for this quantity.`);
+        warnings.push(`${d.label} = ${formatQuantity(v, d.dim)} is outside the physical range for this quantity.`);
       }
     } else if (v === undefined && d.default !== undefined) {
       values[d.key] = d.default;

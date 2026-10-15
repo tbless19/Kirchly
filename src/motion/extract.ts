@@ -27,7 +27,8 @@ const SYSTEM_PROMPT = `You read photos or screenshots of physics problems about 
 Pick the one problem type and variant that fits best, then list every quantity the problem states as a {key, value} pair, and every quantity it asks for under "asks".
 
 Units and signs
-- Values are in SI units (m, s, kg, N, J, m/s, m/s², rad/s, Hz). Convert: 72 km/h -> 20, 50 cm -> 0.5, 300 g -> 0.3, 1200 rpm -> 125.66 rad/s, 3 rev (as angular displacement) -> 18.85 rad (or give it as nrev = 3).
+- Values are in SI units (m, s, kg, N, J, m/s, m/s², rad/s, Hz), whatever units the problem uses. Convert: 72 km/h -> 20, 50 cm -> 0.5, 300 g -> 0.3, 1200 rpm -> 125.66 rad/s, 3 rev (as angular displacement) -> 18.85 rad (or give it as nrev = 3). US units: 1 ft = 0.3048 m, 1 in = 0.0254 m, 1 mi = 1609.344 m, 60 mph = 26.8224 m/s, 1 lb of mass = 0.45359 kg, 1 slug = 14.594 kg, 1 lb of force = 4.4482 N, 1 ft·lb = 1.3558 J; g = 32.2 ft/s² is 9.81 m/s². A weight given in pounds is a force: the mass is weight / g.
+- unit_system: "imperial" if the problem is written in US customary units (ft, mph, lb, slug), otherwise "metric".
 - Variables marked [degrees] stay in degrees.
 - "From rest" means the initial speed is 0. "Comes to a stop" means the final speed is 0. "Dropped" means initial velocity 0.
 - kinematics_1d free_fall: up is positive, so a falling object has negative displacement (dropped from 45 m to the ground: d = -45).
@@ -47,9 +48,10 @@ ${catalogue()}`;
 const SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["title", "type", "variant", "values", "asks", "notes"],
+  required: ["title", "unit_system", "type", "variant", "values", "asks", "notes"],
   properties: {
     title: { type: "string" },
+    unit_system: { type: "string", enum: ["metric", "imperial"] },
     type: { type: "string", enum: MODELS.map((m) => m.type) },
     variant: { type: "string", enum: allVariants() },
     values: {
@@ -76,6 +78,7 @@ const SCHEMA = {
 
 interface Raw {
   title: string;
+  unit_system?: "metric" | "imperial";
   type: Problem["type"];
   variant: string;
   values: { key: string; value: number }[];
@@ -100,6 +103,7 @@ export function fromRaw(raw: Raw): Problem {
     values,
     asks: (raw.asks ?? []).map((a) => ({ label: String(a.label), key: String(a.key) })),
     notes: String(raw.notes ?? ""),
+    units: raw.unit_system === "imperial" ? "imperial" : "metric",
   };
 }
 

@@ -35,7 +35,9 @@ Switch to **Motion** (top bar) for physics problems. Upload a photo or pick an e
 | Collisions | 1D elastic, perfectly inelastic, coefficient of restitution |
 | Oscillations | mass on a spring, simple pendulum |
 
-Each type is a set of variables and equations (`src/motion/models.ts`). The solver works like a student: it repeatedly solves an equation with one unknown, solves 2–4 equations simultaneously when it has to, flags given values that contradict each other, and notes when an equation has more than one answer (e.g. the two launch angles with the same range). Inputs accept units: `72 km/h`, `35°`, `300 rpm`, `50 cm`.
+Each type is a set of variables and equations (`src/motion/models.ts`). The solver works like a student: it repeatedly solves an equation with one unknown, solves 2–4 equations simultaneously when it has to, flags given values that contradict each other, and notes when an equation has more than one answer (e.g. the two launch angles with the same range). Inputs accept units: `72 km/h`, `60 mph`, `35°`, `300 rpm`, `6 in`, `150 lb`.
+
+**Metric | Imperial** (on the problem card) switches every displayed value (inputs, answers, walkthrough, graphs, animation labels) between SI and US customary units (ft, ft/s, lb, lbf, ft·lbf). The solver always works in SI, and a number typed without a unit is read in the selected system. Problems Claude reads in US units switch the display to Imperial automatically.
 
 ## API key
 
@@ -50,7 +52,7 @@ npm test         # solver unit tests
 npm run build    # static site in dist/
 ```
 
-Open `?example=0` … `?example=6` to load a circuit example directly (4–6 are AC), or `?mode=motion&example=0` … `16` for motion.
+Open `?example=0` … `?example=6` to load a circuit example directly (4–6 are AC), or `?mode=motion&example=0` … `17` for motion.
 
 ## Deploy to GitHub Pages
 

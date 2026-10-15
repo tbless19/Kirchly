@@ -1,5 +1,6 @@
-// Physical dimensions, unit parsing ("72 km/h", "35°", "300 rpm") and number formatting for the motion solver.
-// Values are stored in SI, except angles of kind "angle", which are stored in degrees.
+// Physical dimensions, unit parsing ("72 km/h", "35°", "60 mph") and number formatting for the motion solver.
+// Values are always stored in SI (angles of kind "angle" in degrees). The display system (metric or
+// imperial) only changes how values are shown and how unit-less input is read.
 
 export type Dim =
   | "time"
@@ -21,51 +22,117 @@ export type Dim =
   | "count"
   | "unitless";
 
-interface DimInfo {
+export type UnitSystem = "metric" | "imperial";
+
+interface DisplayUnit {
   unit: string; // plain text
   tex: string; // TeX
-  /** Accepted unit spellings -> factor to the stored unit. */
+  /** Stored (SI) value of one display unit. */
+  factor: number;
+}
+
+interface DimInfo {
+  metric: DisplayUnit;
+  /** Omitted when the unit is the same in both systems (time, angles, frequency). */
+  imperial?: DisplayUnit;
+  /** Accepted unit spellings -> SI factor. Lower-case keys also match case-insensitively. */
   aliases: Record<string, number>;
 }
 
+const FT = 0.3048;
+const LB = 0.45359237; // pound-mass, kg
+const LBF = 4.4482216152605; // pound-force, N
+
+const si = (unit: string, tex: string): DisplayUnit => ({ unit, tex, factor: 1 });
+
 const DIMS: Record<Dim, DimInfo> = {
-  time: { unit: "s", tex: "\\mathrm{s}", aliases: { s: 1, sec: 1, ms: 1e-3, min: 60, h: 3600, hr: 3600 } },
+  time: { metric: si("s", "\\mathrm{s}"), aliases: { s: 1, sec: 1, ms: 1e-3, min: 60, h: 3600, hr: 3600 } },
   length: {
-    unit: "m",
-    tex: "\\mathrm{m}",
-    aliases: { m: 1, cm: 0.01, mm: 1e-3, km: 1000, ft: 0.3048, in: 0.0254, mi: 1609.344 },
+    metric: si("m", "\\mathrm{m}"),
+    imperial: { unit: "ft", tex: "\\mathrm{ft}", factor: FT },
+    aliases: { m: 1, cm: 0.01, mm: 1e-3, km: 1000, ft: FT, feet: FT, foot: FT, in: 0.0254, inch: 0.0254, inches: 0.0254, yd: 0.9144, mi: 1609.344 },
   },
   speed: {
-    unit: "m/s",
-    tex: "\\mathrm{m/s}",
-    aliases: { "m/s": 1, "km/h": 1 / 3.6, kph: 1 / 3.6, "km/hr": 1 / 3.6, mph: 0.44704, "ft/s": 0.3048, "cm/s": 0.01 },
+    metric: si("m/s", "\\mathrm{m/s}"),
+    imperial: { unit: "ft/s", tex: "\\mathrm{ft/s}", factor: FT },
+    aliases: { "m/s": 1, "km/h": 1 / 3.6, kph: 1 / 3.6, "km/hr": 1 / 3.6, "cm/s": 0.01, mph: 0.44704, "mi/h": 0.44704, "ft/s": FT, fps: FT, "in/s": 0.0254 },
   },
-  accel: { unit: "m/s²", tex: "\\mathrm{m/s^2}", aliases: { "m/s²": 1, "m/s^2": 1, "m/s2": 1, "ft/s²": 0.3048, "ft/s^2": 0.3048, g: 9.8 } },
-  mass: { unit: "kg", tex: "\\mathrm{kg}", aliases: { kg: 1, g: 1e-3, lb: 0.45359237, t: 1000 } },
-  force: { unit: "N", tex: "\\mathrm{N}", aliases: { n: 1, kn: 1000, lbf: 4.4482216 } },
-  angle: { unit: "°", tex: "^\\circ", aliases: { "°": 1, deg: 1, degrees: 1, rad: 180 / Math.PI } },
-  angle_rad: { unit: "rad", tex: "\\,\\mathrm{rad}", aliases: { rad: 1, rev: 2 * Math.PI, "°": Math.PI / 180, deg: Math.PI / 180 } },
+  accel: {
+    metric: si("m/s²", "\\mathrm{m/s^2}"),
+    imperial: { unit: "ft/s²", tex: "\\mathrm{ft/s^2}", factor: FT },
+    aliases: { "m/s²": 1, "m/s^2": 1, "m/s2": 1, "ft/s²": FT, "ft/s^2": FT, "ft/s2": FT, g: 9.8 },
+  },
+  mass: {
+    metric: si("kg", "\\mathrm{kg}"),
+    imperial: { unit: "lb", tex: "\\mathrm{lb}", factor: LB },
+    aliases: { kg: 1, g: 1e-3, t: 1000, lb: LB, lbs: LB, lbm: LB, oz: LB / 16, slug: 14.593903, slugs: 14.593903 },
+  },
+  force: {
+    metric: si("N", "\\mathrm{N}"),
+    imperial: { unit: "lbf", tex: "\\mathrm{lbf}", factor: LBF },
+    aliases: { n: 1, kn: 1000, lbf: LBF, lb: LBF, lbs: LBF, kip: 1000 * LBF },
+  },
+  angle: { metric: si("°", "^\\circ"), aliases: { "°": 1, deg: 1, degrees: 1, rad: 180 / Math.PI } },
+  angle_rad: { metric: si("rad", "\\,\\mathrm{rad}"), aliases: { rad: 1, rev: 2 * Math.PI, "°": Math.PI / 180, deg: Math.PI / 180 } },
   angvel: {
-    unit: "rad/s",
-    tex: "\\mathrm{rad/s}",
+    metric: si("rad/s", "\\mathrm{rad/s}"),
     aliases: { "rad/s": 1, rpm: (2 * Math.PI) / 60, "rev/min": (2 * Math.PI) / 60, "rev/s": 2 * Math.PI, rps: 2 * Math.PI, "°/s": Math.PI / 180, "deg/s": Math.PI / 180 },
   },
-  angacc: { unit: "rad/s²", tex: "\\mathrm{rad/s^2}", aliases: { "rad/s²": 1, "rad/s^2": 1, "rad/s2": 1, "rev/s²": 2 * Math.PI, "rev/s^2": 2 * Math.PI } },
-  energy: { unit: "J", tex: "\\mathrm{J}", aliases: { j: 1, kj: 1000, mj: 1e6, cal: 4.184 } },
-  momentum: { unit: "kg·m/s", tex: "\\mathrm{kg\\cdot m/s}", aliases: { "kg·m/s": 1, "kg*m/s": 1, "kgm/s": 1, "n·s": 1, "n*s": 1, ns: 1 } },
-  freq: { unit: "Hz", tex: "\\mathrm{Hz}", aliases: { hz: 1, khz: 1000 } },
-  torque: { unit: "N·m", tex: "\\mathrm{N\\cdot m}", aliases: { "n·m": 1, "n*m": 1, nm: 1 } },
-  inertia: { unit: "kg·m²", tex: "\\mathrm{kg\\cdot m^2}", aliases: { "kg·m²": 1, "kg*m^2": 1, "kgm^2": 1, "kg·m^2": 1 } },
-  spring: { unit: "N/m", tex: "\\mathrm{N/m}", aliases: { "n/m": 1, "kn/m": 1000, "n/cm": 100 } },
-  count: { unit: "", tex: "", aliases: { rev: 1, revs: 1, revolutions: 1 } },
-  unitless: { unit: "", tex: "", aliases: {} },
+  angacc: { metric: si("rad/s²", "\\mathrm{rad/s^2}"), aliases: { "rad/s²": 1, "rad/s^2": 1, "rad/s2": 1, "rev/s²": 2 * Math.PI, "rev/s^2": 2 * Math.PI } },
+  energy: {
+    metric: si("J", "\\mathrm{J}"),
+    imperial: { unit: "ft·lbf", tex: "\\mathrm{ft\\cdot lbf}", factor: FT * LBF },
+    aliases: { j: 1, kj: 1000, mj: 1e6, cal: 4.184, "ft·lbf": FT * LBF, "ft*lbf": FT * LBF, "ft-lbf": FT * LBF, "ft·lb": FT * LBF, "ft-lb": FT * LBF, ftlb: FT * LBF, btu: 1055.06 },
+  },
+  momentum: {
+    metric: si("kg·m/s", "\\mathrm{kg\\cdot m/s}"),
+    imperial: { unit: "lb·ft/s", tex: "\\mathrm{lb\\cdot ft/s}", factor: LB * FT },
+    aliases: { "kg·m/s": 1, "kg*m/s": 1, "kgm/s": 1, "n·s": 1, "n*s": 1, ns: 1, "lb·ft/s": LB * FT, "lb*ft/s": LB * FT, "lbf·s": LBF, "lbf*s": LBF },
+  },
+  freq: { metric: si("Hz", "\\mathrm{Hz}"), aliases: { hz: 1, khz: 1000 } },
+  torque: {
+    metric: si("N·m", "\\mathrm{N\\cdot m}"),
+    imperial: { unit: "lbf·ft", tex: "\\mathrm{lbf\\cdot ft}", factor: LBF * FT },
+    aliases: { "n·m": 1, "n*m": 1, nm: 1, "lbf·ft": LBF * FT, "lbf*ft": LBF * FT, "lb·ft": LBF * FT, "lb-ft": LBF * FT, "ft·lb": LBF * FT, "lbf·in": LBF * 0.0254, "lb·in": LBF * 0.0254 },
+  },
+  inertia: {
+    metric: si("kg·m²", "\\mathrm{kg\\cdot m^2}"),
+    imperial: { unit: "lb·ft²", tex: "\\mathrm{lb\\cdot ft^2}", factor: LB * FT * FT },
+    aliases: { "kg·m²": 1, "kg*m^2": 1, "kgm^2": 1, "kg·m^2": 1, "lb·ft²": LB * FT * FT, "lb*ft^2": LB * FT * FT, "lb·ft^2": LB * FT * FT, "slug·ft²": 14.593903 * FT * FT, "slug*ft^2": 14.593903 * FT * FT },
+  },
+  spring: {
+    metric: si("N/m", "\\mathrm{N/m}"),
+    imperial: { unit: "lbf/ft", tex: "\\mathrm{lbf/ft}", factor: LBF / FT },
+    aliases: { "n/m": 1, "kn/m": 1000, "n/cm": 100, "lbf/ft": LBF / FT, "lb/ft": LBF / FT, "lbf/in": LBF / 0.0254, "lb/in": LBF / 0.0254 },
+  },
+  count: { metric: si("", ""), aliases: { rev: 1, revs: 1, revolutions: 1 } },
+  unitless: { metric: si("", ""), aliases: {} },
 };
 
-export const unitOf = (d: Dim) => DIMS[d].unit;
+let system: UnitSystem = "metric";
+
+export function setUnitSystem(s: UnitSystem) {
+  system = s;
+}
+
+export function unitSystem(): UnitSystem {
+  return system;
+}
+
+function display(dim: Dim): DisplayUnit {
+  const info = DIMS[dim];
+  return (system === "imperial" && info.imperial) || info.metric;
+}
+
+/** Unit label in the current display system. */
+export const unitOf = (d: Dim) => display(d).unit;
+
+/** SI value -> number in the current display unit. */
+export const toDisplay = (v: number, dim: Dim) => v / display(dim).factor;
 
 /**
- * Parses user input for a quantity. Returns null for "" or "?" (unknown), NaN if unreadable.
- * The unit is optional; a missing unit means the stored unit.
+ * Parses user input for a quantity, returning SI. Returns null for "" or "?" (unknown), NaN if unreadable.
+ * A number without a unit is read in the current display unit.
  */
 export function parseQuantity(text: string, dim: Dim): number | null {
   const t = text.trim().replace(/−/g, "-").replace(/,/g, "");
@@ -74,9 +141,10 @@ export function parseQuantity(text: string, dim: Dim): number | null {
   if (!m) return NaN;
   const v = parseFloat(m[1]);
   const unit = m[2].trim();
-  if (!unit) return v;
+  if (!unit) return v * display(dim).factor;
   const info = DIMS[dim];
-  const factor = info.aliases[unit] ?? info.aliases[unit.toLowerCase()] ?? (unit === info.unit ? 1 : undefined);
+  const own = [info.metric, info.imperial].find((u) => u && u.unit === unit);
+  const factor = info.aliases[unit] ?? info.aliases[unit.toLowerCase()] ?? own?.factor;
   return factor === undefined ? NaN : v * factor;
 }
 
@@ -91,10 +159,12 @@ export function formatNumber(v: number, digits = 4): string {
   return `${Number(mant)}×10${sup}`;
 }
 
+/** An SI value formatted in the current display system: "12.2 m" or "40.03 ft". */
 export function formatQuantity(v: number, dim: Dim, digits = 4): string {
-  const u = DIMS[dim].unit;
-  if (dim === "angle") return `${formatNumber(v, digits)}°`;
-  return u ? `${formatNumber(v, digits)} ${u}` : formatNumber(v, digits);
+  const d = display(dim);
+  const n = formatNumber(v / d.factor, digits);
+  if (dim === "angle") return `${n}°`;
+  return d.unit ? `${n} ${d.unit}` : n;
 }
 
 /** TeX number: 4.08, 3.25\times10^{-3}. */
@@ -107,10 +177,12 @@ export function texNumber(v: number, digits = 4): string {
   return `${Number(mant)}\\times10^{${Number(exp)}}`;
 }
 
+/** An SI value as TeX in the current display system. */
 export function texQuantity(v: number, dim: Dim, digits = 4): string {
-  const info = DIMS[dim];
-  if (dim === "angle") return `${texNumber(v, digits)}^\\circ`;
-  if (!info.tex) return texNumber(v, digits);
-  if (dim === "angle_rad") return `${texNumber(v, digits)}${info.tex}`;
-  return `${texNumber(v, digits)}\\,${info.tex}`;
+  const d = display(dim);
+  const n = texNumber(v / d.factor, digits);
+  if (dim === "angle") return `${n}^\\circ`;
+  if (!d.tex) return n;
+  if (dim === "angle_rad") return `${n}${d.tex}`;
+  return `${n}\\,${d.tex}`;
 }
